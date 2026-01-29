@@ -56,3 +56,7 @@ END $$;
 -- 8. 验证清理结果
 SELECT slot_name, slot_type, active FROM pg_replication_slots;
 SELECT pubname FROM pg_publication WHERE pubname LIKE 'debezium_publication_%';
+
+
+select *
+from pg_publication;

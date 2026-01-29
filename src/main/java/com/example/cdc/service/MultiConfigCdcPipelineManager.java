@@ -375,8 +375,29 @@ public class MultiConfigCdcPipelineManager {
             // 优化：如果 Slot 已存在，直接使用
             props.setProperty("replication.slot.name", "debezium_slot_" + config.getId());
 
+            // 优化：如果 Slot 不存在则创建，存在则重用
+            props.setProperty("slot.creation.delay.ms", "5000");
+
             // Snapshot 配置 - 优化：如果已有偏移量，跳过快照
             props.setProperty("snapshot.mode", "when_needed");
+            props.setProperty("snapshot.delay.ms", "5000");
+            props.setProperty("snapshot.fetch.size", "2048");
+
+            // Schema History
+            props.setProperty("schema.history.internal", "io.debezium.relational.history.FileDatabaseHistory");
+            props.setProperty("schema.history.internal.file.filename", "./schema-history-" + config.getId() + ".dat");
+
+            // 性能优化
+            props.setProperty("max.batch.size", "2048");
+            props.setProperty("max.queue.size", "8192");
+            props.setProperty("poll.interval.ms", "1000");
+
+            // 连接超时优化
+            props.setProperty("database.connect.timeout.ms", "30000");
+            props.setProperty("database.statement.timeout.ms", "30000");
+
+            // 优化：减少 WAL 日志保留时间
+            props.setProperty("wal.lsn.flush.interval.ms", "10000");
             props.setProperty("snapshot.delay.ms", "5000");
             props.setProperty("snapshot.fetch.size", "2048");
 
