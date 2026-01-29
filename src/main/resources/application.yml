@@ -1,0 +1,73 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: debezium-cdc-rocketmq
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/postgres
+    username: postgres
+    password: 123456
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+# Debezium 配置
+debezium:
+  name: postgres-connector
+  connector-class: io.debezium.connector.postgresql.PostgresConnector
+  offset-storage-class: org.apache.kafka.connect.storage.FileOffsetBackingStore
+  offset-storage-file-name: ./offsets.dat
+  offset-flush-interval-ms: 60000
+  topic-prefix: dbserver1
+
+  database:
+    hostname: localhost
+    port: 5432
+    user: postgres
+    password: 123456
+    dbname: postgres
+    server-name: dbserver1
+    schema-include-list: flink
+    table-include-list: flink.users
+    plugin-name: pgoutput
+    slot-name: debezium_slot
+    publication-name: debezium_publication
+
+# RocketMQ 配置
+rocketmq:
+  namesrv-addr: 45.128.210.102:9876
+  producer-group: debezium-cdc-producer
+  topic: cdc-events2
+  send-msg-timeout: 3000
+  retry-times-when-send-failed: 2
+  max-message-size: 4194304
+
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.example.cdc: DEBUG
+    io.debezium: INFO
+    org.apache.rocketmq: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# Actuator 配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
