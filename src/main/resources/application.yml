@@ -20,27 +20,6 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
-# Debezium 配置
-debezium:
-  name: postgres-connector
-  connector-class: io.debezium.connector.postgresql.PostgresConnector
-  offset-storage-class: org.apache.kafka.connect.storage.FileOffsetBackingStore
-  offset-storage-file-name: ./offsets.dat
-  offset-flush-interval-ms: 60000
-  topic-prefix: dbserver1
-
-  database:
-    hostname: localhost
-    port: 5432
-    user: postgres
-    password: 123456
-    dbname: postgres
-    server-name: dbserver1
-    schema-include-list: flink
-    table-include-list: flink.users
-    plugin-name: pgoutput
-    slot-name: debezium_slot
-    publication-name: debezium_publication
 
 # RocketMQ 配置
 rocketmq:
@@ -50,6 +29,18 @@ rocketmq:
   send-msg-timeout: 3000
   retry-times-when-send-failed: 2
   max-message-size: 4194304
+
+# 异步事件发送配置
+async:
+  event:
+    queue:
+      size: 10000  # 事件队列大小
+    sender:
+      threads: 4  # 发送线程数
+      batch:
+        size: 100  # 批处理大小
+        timeout:
+          ms: 5000  # 批处理超时（毫秒）
 
 
 # 日志配置

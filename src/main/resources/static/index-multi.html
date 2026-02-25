@@ -82,6 +82,14 @@
             padding-bottom: 10px;
         }
 
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
         .pipeline-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -297,13 +305,16 @@
 
         .tabs {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            gap: 0;
+            margin-bottom: 0;
+            background: white;
+            border-radius: 8px 8px 0 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             border-bottom: 2px solid #dee2e6;
         }
 
         .tab-button {
-            padding: 10px 20px;
+            padding: 12px 24px;
             background: none;
             border: none;
             border-bottom: 3px solid transparent;
@@ -311,19 +322,59 @@
             cursor: pointer;
             font-weight: 500;
             transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        .tab-button:hover {
+            color: #667eea;
+            background: #f8f9fa;
         }
 
         .tab-button.active {
             color: #667eea;
             border-bottom-color: #667eea;
+            background: #f8f9fa;
         }
 
         .tab-content {
             display: none;
+            background: white;
+            border-radius: 0 0 8px 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
         }
 
         .tab-content.active {
             display: block;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.3s ease;
+        }
+
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #333;
+            font-size: 13px;
+        }
+
+        input::placeholder {
+            color: #999;
         }
 
         .empty-state {
@@ -399,6 +450,33 @@
                     <div class="empty-state">暂无 CDC 管道，请添加配置并启用</div>
                 </div>
             </div>
+
+            <!-- 异步发送统计面板 -->
+            <div class="card">
+                <h2>📤 异步事件发送统计</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">总入队事件</div>
+                        <div class="stat-value" id="statTotalEnqueued">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">成功发送</div>
+                        <div class="stat-value" id="statTotalSent" style="color: #28a745;">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">发送失败</div>
+                        <div class="stat-value" id="statTotalFailed" style="color: #dc3545;">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">队列中待发送</div>
+                        <div class="stat-value" id="statQueuedSize" style="color: #ffc107;">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">服务状态</div>
+                        <div class="stat-value" id="statAsyncRunning" style="font-size: 14px;">-</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- 配置管理标签页 -->
@@ -407,7 +485,7 @@
                 <h2>📝 新增数据源配置</h2>
                 <div id="formAlert"></div>
                 <form id="configForm">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
                         <div>
                             <label>配置名称 *</label>
                             <input type="text" id="configName" placeholder="例如: 生产库用户表" required>
@@ -449,9 +527,9 @@
                             <input type="text" id="rocketmqTag" placeholder="可选，如: users">
                         </div>
                     </div>
-                    <div style="display: flex; gap: 10px; margin-top: 20px;">
-                        <button type="submit" class="btn-primary" style="flex: 1;">💾 保存配置</button>
-                        <button type="reset" class="btn-warning" style="flex: 1;">🔄 重置</button>
+                    <div style="display: flex; gap: 10px; margin-top: 25px;">
+                        <button type="submit" class="btn-primary" style="flex: 1; padding: 12px;">💾 保存配置</button>
+                        <button type="reset" class="btn-warning" style="flex: 1; padding: 12px;">🔄 重置</button>
                     </div>
                 </form>
             </div>
@@ -656,8 +734,28 @@
                 document.getElementById('totalEvents').textContent = totalEvents;
                 document.getElementById('statLastUpdate').textContent = new Date().toLocaleTimeString('zh-CN');
 
+                // 刷新异步发送统计
+                await refreshAsyncStats();
+
             } catch (error) {
                 console.error('刷新管道状态失败:', error);
+            }
+        }
+
+        // 刷新异步发送统计
+        async function refreshAsyncStats() {
+            try {
+                const response = await fetch(`${PIPELINE_API}/async-stats`);
+                const stats = await response.json();
+
+                document.getElementById('statTotalEnqueued').textContent = stats.totalEnqueued;
+                document.getElementById('statTotalSent').textContent = stats.totalSent;
+                document.getElementById('statTotalFailed').textContent = stats.totalFailed;
+                document.getElementById('statQueuedSize').textContent = stats.queuedSize;
+                document.getElementById('statAsyncRunning').textContent = stats.running ? '✓ 运行中' : '○ 已停止';
+
+            } catch (error) {
+                console.error('刷新异步统计失败:', error);
             }
         }
 
@@ -713,7 +811,9 @@
             document.getElementById(tabName).classList.add('active');
 
             // 标记选中的按钮
-            event.target.classList.add('active');
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
         }
 
         // 显示提示信息

@@ -25,6 +25,7 @@ public class MultiConfigCdcPipelineManager {
 
     private final RocketMQProducerService rocketMQProducerService;
     private final DataSourceConfigService configService;
+    private final AsyncEventSenderService asyncEventSenderService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // 存储每个配置对应的 CDC 管道
@@ -34,9 +35,11 @@ public class MultiConfigCdcPipelineManager {
     private ExecutorService virtualThreadExecutor;
 
     public MultiConfigCdcPipelineManager(RocketMQProducerService rocketMQProducerService,
-                                         DataSourceConfigService configService) {
+                                         DataSourceConfigService configService,
+                                         AsyncEventSenderService asyncEventSenderService) {
         this.rocketMQProducerService = rocketMQProducerService;
         this.configService = configService;
+        this.asyncEventSenderService = asyncEventSenderService;
     }
 
     /**
@@ -88,7 +91,7 @@ public class MultiConfigCdcPipelineManager {
 
             // 创建 CDC 管道
             CdcPipeline pipeline = new CdcPipeline(config, virtualThreadExecutor,
-                                                   rocketMQProducerService, objectMapper);
+                                                   rocketMQProducerService, asyncEventSenderService, objectMapper);
 
             // 启动管道
             pipeline.start();
@@ -226,6 +229,7 @@ public class MultiConfigCdcPipelineManager {
         private final DataSourceConfig config;
         private final ExecutorService executor;
         private final RocketMQProducerService rocketMQProducerService;
+        private final AsyncEventSenderService asyncEventSenderService;
         private final ObjectMapper objectMapper;
 
         private DebeziumEngine<ChangeEvent<String, String>> engine;
@@ -236,10 +240,12 @@ public class MultiConfigCdcPipelineManager {
 
         public CdcPipeline(DataSourceConfig config, ExecutorService executor,
                           RocketMQProducerService rocketMQProducerService,
+                          AsyncEventSenderService asyncEventSenderService,
                           ObjectMapper objectMapper) {
             this.config = config;
             this.executor = executor;
             this.rocketMQProducerService = rocketMQProducerService;
+            this.asyncEventSenderService = asyncEventSenderService;
             this.objectMapper = objectMapper;
         }
 
@@ -307,6 +313,8 @@ public class MultiConfigCdcPipelineManager {
 
         /**
          * 处理变更事件
+         * 将事件加入异步队列，不直接发送到 RocketMQ
+         * 这样可以防止 RocketMQ 连接问题导致 Debezium 引擎停止
          */
         private void handleChangeEvent(ChangeEvent<String, String> event) {
             try {
@@ -321,12 +329,12 @@ public class MultiConfigCdcPipelineManager {
                     currentLsn = lsn;
                 }
 
-                // 发送到 RocketMQ
+                // 将事件加入异步队列（非阻塞）
                 String topic = config.getRocketmqTopic();
                 String tag = config.getRocketmqTag() != null ? config.getRocketmqTag() : config.getTableName();
                 String messageKey = extractPrimaryKey(value, event.key());
 
-                rocketMQProducerService.sendMessage(topic, tag, messageKey, value);
+                asyncEventSenderService.enqueueEvent(topic, tag, messageKey, value, config.getId());
 
                 long count = processedEventCount.incrementAndGet();
                 log.debug("配置 {} 处理变更事件 #{} - LSN: {}", config.getId(), count, lsn);

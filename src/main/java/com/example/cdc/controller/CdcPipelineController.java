@@ -1,5 +1,6 @@
 package com.example.cdc.controller;
 
+import com.example.cdc.service.AsyncEventSenderService;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,7 @@ public class CdcPipelineController {
 
     private final MultiConfigCdcPipelineManager pipelineManager;
     private final DataSourceConfigService configService;
+    private final AsyncEventSenderService asyncEventSenderService;
 
     /**
      * 获取所有 CDC 管道的状态
@@ -91,4 +93,13 @@ public class CdcPipelineController {
             return ResponseEntity.status(500).body("重启 CDC 管道失败: " + e.getMessage());
         }
     }
+
+    /**
+     * 获取异步事件发送服务的统计信息
+     */
+    @GetMapping("/async-stats")
+    public ResponseEntity<AsyncEventSenderService.Statistics> getAsyncStats() {
+        return ResponseEntity.ok(asyncEventSenderService.getStatistics());
+    }
 }
+
