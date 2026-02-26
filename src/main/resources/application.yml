@@ -41,6 +41,10 @@ async:
         size: 100  # 批处理大小
         timeout:
           ms: 5000  # 批处理超时（毫秒）
+    retry:
+      enabled: true  # 启用重试机制
+      interval:
+        seconds: 60  # 重试间隔（秒）
 
 
 # 日志配置

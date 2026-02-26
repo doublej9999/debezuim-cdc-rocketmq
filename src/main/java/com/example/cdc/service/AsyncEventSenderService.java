@@ -1,25 +1,34 @@
 package com.example.cdc.service;
 
+import com.example.cdc.model.EventLog;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.List;
 
 /**
  * 异步事件发送服务
  * 将 Debezium 事件缓冲到队列中，异步发送到 RocketMQ
  * 解耦 Debezium 引擎和 RocketMQ 生产者，防止 RocketMQ 连接问题导致引擎停止
+ *
+ * 新增功能：
+ * 1. 数据库持久化队列 - 事件先保存到数据库，防止重启丢失
+ * 2. 重试机制 - 失败事件自动重试（最多 3 次）
+ * 3. 事件日志记录 - 所有事件状态可追溯
  */
 @Slf4j
 @Service
 public class AsyncEventSenderService {
 
     private final RocketMQProducerService rocketMQProducerService;
+    private final EventLogService eventLogService;
 
     @Value("${async.event.queue.size:10000}")
     private int queueSize;
@@ -33,6 +42,12 @@ public class AsyncEventSenderService {
     @Value("${async.event.sender.batch.timeout.ms:5000}")
     private long batchTimeoutMs;
 
+    @Value("${async.event.retry.enabled:true}")
+    private boolean retryEnabled;
+
+    @Value("${async.event.retry.interval.seconds:60}")
+    private int retryIntervalSeconds;
+
     private BlockingQueue<ChangeEventMessage> eventQueue;
     private ExecutorService senderExecutor;
     private volatile boolean running = false;
@@ -40,8 +55,9 @@ public class AsyncEventSenderService {
     private final AtomicLong totalSent = new AtomicLong(0);
     private final AtomicLong totalFailed = new AtomicLong(0);
 
-    public AsyncEventSenderService(RocketMQProducerService rocketMQProducerService) {
+    public AsyncEventSenderService(RocketMQProducerService rocketMQProducerService, EventLogService eventLogService) {
         this.rocketMQProducerService = rocketMQProducerService;
+        this.eventLogService = eventLogService;
     }
 
     /**
@@ -72,6 +88,7 @@ public class AsyncEventSenderService {
     /**
      * 将事件加入队列（非阻塞）
      * 如果队列满，记录警告但不阻塞 Debezium 引擎
+     * 新增：事件先保存到数据库，确保持久化
      */
     public void enqueueEvent(String topic, String tag, String key, String body, Long configId) {
         if (!running) {
@@ -79,16 +96,27 @@ public class AsyncEventSenderService {
             return;
         }
 
-        ChangeEventMessage message = new ChangeEventMessage(topic, tag, key, body, configId);
+        try {
+            // 1. 先保存到数据库（持久化）
+            EventLog eventLog = eventLogService.createEventLog(configId, topic, tag, key, body);
 
-        boolean offered = eventQueue.offer(message);
-        if (offered) {
-            totalEnqueued.incrementAndGet();
-            log.debug("事件已入队 - ConfigId: {}, Topic: {}, 队列大小: {}", configId, topic, eventQueue.size());
-        } else {
+            // 2. 加入内存队列（快速发送）
+            ChangeEventMessage message = new ChangeEventMessage(topic, tag, key, body, configId, eventLog.getId());
+
+            boolean offered = eventQueue.offer(message);
+            if (offered) {
+                totalEnqueued.incrementAndGet();
+                log.debug("事件已入队 - ConfigId: {}, Topic: {}, EventId: {}, 队列大小: {}",
+                    configId, topic, eventLog.getId(), eventQueue.size());
+            } else {
+                totalFailed.incrementAndGet();
+                log.warn("事件队列已满，事件已保存到数据库等待重试 - ConfigId: {}, Topic: {}, EventId: {}",
+                    configId, topic, eventLog.getId());
+            }
+        } catch (Exception e) {
             totalFailed.incrementAndGet();
-            log.warn("事件队列已满，事件被丢弃 - ConfigId: {}, Topic: {}, 队列大小: {}",
-                configId, topic, eventQueue.size());
+            log.error("保存事件到数据库失败 - ConfigId: {}, Topic: {}, Error: {}",
+                configId, topic, e.getMessage(), e);
         }
     }
 
@@ -131,17 +159,32 @@ public class AsyncEventSenderService {
 
     /**
      * 发送单条消息
+     * 新增：更新数据库中的事件状态
      */
     private void sendSingleMessage(ChangeEventMessage message) {
         try {
             rocketMQProducerService.sendMessage(message.topic, message.tag, message.key, message.body);
             totalSent.incrementAndGet();
-            log.debug("消息发送成功 - ConfigId: {}, Topic: {}, Tag: {}",
-                message.configId, message.topic, message.tag);
+
+            // 标记为已发送
+            if (message.eventId != null) {
+                eventLogService.markAsSent(message.eventId);
+            }
+
+            log.debug("消息发送成功 - ConfigId: {}, Topic: {}, Tag: {}, EventId: {}",
+                message.configId, message.topic, message.tag, message.eventId);
         } catch (Exception e) {
             totalFailed.incrementAndGet();
-            log.error("消息发送失败 - ConfigId: {}, Topic: {}, Tag: {}, Error: {}",
-                message.configId, message.topic, message.tag, e.getMessage());
+
+            // 标记为待重试（如果启用重试）
+            if (message.eventId != null && retryEnabled) {
+                eventLogService.markForRetry(message.eventId, e.getMessage());
+            } else if (message.eventId != null) {
+                eventLogService.markAsFailed(message.eventId, e.getMessage());
+            }
+
+            log.error("消息发送失败 - ConfigId: {}, Topic: {}, Tag: {}, EventId: {}, Error: {}",
+                message.configId, message.topic, message.tag, message.eventId, e.getMessage());
             // 不抛出异常，继续处理下一条消息
         }
     }
@@ -183,6 +226,44 @@ public class AsyncEventSenderService {
     }
 
     /**
+     * 定时重试失败的事件
+     * 每隔一定时间从数据库中查询待重试的事件，重新加入队列
+     */
+    @Scheduled(fixedDelayString = "${async.event.retry.interval.seconds:60}000")
+    public void retryFailedEvents() {
+        if (!running || !retryEnabled) {
+            return;
+        }
+
+        try {
+            List<EventLog> pendingEvents = eventLogService.getPendingRetryEvents();
+            if (pendingEvents.isEmpty()) {
+                return;
+            }
+
+            log.info("发现 {} 条待重试事件，开始重试...", pendingEvents.size());
+
+            for (EventLog event : pendingEvents) {
+                ChangeEventMessage message = new ChangeEventMessage(
+                    event.getTopic(),
+                    event.getTag(),
+                    event.getMessageKey(),
+                    event.getMessageBody(),
+                    event.getConfigId(),
+                    event.getId()
+                );
+
+                // 直接发送，不再入队
+                sendSingleMessage(message);
+            }
+
+            log.info("重试任务完成");
+        } catch (Exception e) {
+            log.error("重试失败事件时出错: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * 获取统计信息
      */
     public Statistics getStatistics() {
@@ -205,13 +286,15 @@ public class AsyncEventSenderService {
         private final String key;
         private final String body;
         private final Long configId;
+        private final Long eventId;  // 数据库事件日志 ID
 
-        public ChangeEventMessage(String topic, String tag, String key, String body, Long configId) {
+        public ChangeEventMessage(String topic, String tag, String key, String body, Long configId, Long eventId) {
             this.topic = topic;
             this.tag = tag;
             this.key = key;
             this.body = body;
             this.configId = configId;
+            this.eventId = eventId;
         }
     }
 
