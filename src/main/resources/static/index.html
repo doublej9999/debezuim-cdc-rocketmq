@@ -56,16 +56,6 @@
             font-weight: bold;
         }
 
-        .status-running {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .status-stopped {
-            background: #f8d7da;
-            color: #721c24;
-        }
-
         .card {
             background: white;
             border-radius: 8px;
@@ -248,34 +238,6 @@
             background: #f8f9fa;
         }
 
-        .alert {
-            padding: 12px 15px;
-            border-radius: 4px;
-            margin-bottom: 15px;
-            display: none;
-        }
-
-        .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-            display: block;
-        }
-
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-            display: block;
-        }
-
-        .alert-info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
-            display: block;
-        }
-
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -383,315 +345,320 @@
             color: #999;
         }
 
-        .loading {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- 头部 -->
-        <header>
-            <h1>🚀 Debezium CDC 多管道管理平台</h1>
-            <div class="header-info">
-                <div class="info-item">
-                    <span>活跃管道数:</span>
-                    <span id="activePipelineCount" style="font-weight: bold;">-</span>
-                </div>
-                <div class="info-item">
-                    <span>总事件数:</span>
-                    <span id="totalEvents" style="font-weight: bold;">-</span>
-                </div>
-                <div class="info-item">
-                    <button class="btn-primary" onclick="refreshAllStatus()">🔄 刷新所有状态</button>
-                </div>
+<div class="container">
+    <!-- 头部 -->
+    <header>
+        <h1>🚀 Debezium CDC 多管道管理平台</h1>
+        <div class="header-info">
+            <div class="info-item">
+                <span>活跃管道数:</span>
+                <span id="activePipelineCount" style="font-weight: bold;">-</span>
             </div>
-        </header>
-
-        <!-- 标签页 -->
-        <div class="tabs">
-            <button class="tab-button active" onclick="switchTab('pipelines')">📊 CDC 管道监控</button>
-            <button class="tab-button" onclick="switchTab('configs')">⚙️ 配置管理</button>
-            <button class="tab-button" onclick="switchTab('eventlogs')">📋 事件日志</button>
+            <div class="info-item">
+                <span>总事件数:</span>
+                <span id="totalEvents" style="font-weight: bold;">-</span>
+            </div>
+            <div class="info-item">
+                <button class="btn-primary" onclick="refreshAllStatus()">🔄 刷新所有状态</button>
+            </div>
         </div>
+    </header>
 
-        <!-- CDC 管道监控标签页 -->
-        <div id="pipelines" class="tab-content active">
-            <div class="card">
-                <h2>📊 实时 CDC 管道状态</h2>
-                <div id="pipelineAlert"></div>
+    <!-- 标签页 -->
+    <div class="tabs">
+        <button class="tab-button active" onclick="switchTab('pipelines')">📊 CDC 管道监控</button>
+        <button class="tab-button" onclick="switchTab('configs')">⚙️ 配置管理</button>
+        <button class="tab-button" onclick="switchTab('eventlogs')">📋 事件日志</button>
+    </div>
 
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="stat-label">活跃管道</div>
-                        <div class="stat-value" id="statActivePipelines">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">总事件数</div>
-                        <div class="stat-value" id="statTotalEvents">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">最后更新</div>
-                        <div class="stat-value" id="statLastUpdate" style="font-size: 14px;">-</div>
-                    </div>
+    <!-- CDC 管道监控标签页 -->
+    <div id="pipelines" class="tab-content active">
+        <div class="card">
+            <h2>📊 实时 CDC 管道状态</h2>
+            <div id="pipelineAlert"></div>
+
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">活跃管道</div>
+                    <div class="stat-value" id="statActivePipelines">0</div>
                 </div>
-
-                <div id="pipelineContainer" class="pipeline-grid">
-                    <div class="empty-state">暂无 CDC 管道，请添加配置并启用</div>
+                <div class="stat-item">
+                    <div class="stat-label">总事件数</div>
+                    <div class="stat-value" id="statTotalEvents">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">最后更新</div>
+                    <div class="stat-value" id="statLastUpdate" style="font-size: 14px;">-</div>
                 </div>
             </div>
 
-            <!-- 异步发送统计面板 -->
-            <div class="card">
-                <h2>📤 异步事件发送统计</h2>
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="stat-label">总入队事件</div>
-                        <div class="stat-value" id="statTotalEnqueued">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">成功发送</div>
-                        <div class="stat-value" id="statTotalSent" style="color: #28a745;">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">发送失败</div>
-                        <div class="stat-value" id="statTotalFailed" style="color: #dc3545;">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">队列中待发送</div>
-                        <div class="stat-value" id="statQueuedSize" style="color: #ffc107;">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">服务状态</div>
-                        <div class="stat-value" id="statAsyncRunning" style="font-size: 14px;">-</div>
-                    </div>
-                </div>
+            <div id="pipelineContainer" class="pipeline-grid">
+                <div class="empty-state">暂无 CDC 管道，请添加配置并启用</div>
             </div>
         </div>
 
-        <!-- 配置管理标签页 -->
-        <div id="configs" class="tab-content">
-            <div class="card">
-                <h2>📝 新增数据源配置</h2>
-                <div id="formAlert"></div>
-                <form id="configForm">
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
-                        <div>
-                            <label>配置名称 *</label>
-                            <input type="text" id="configName" placeholder="例如: 生产库用户表" required>
-                        </div>
-                        <div>
-                            <label>数据库主机 *</label>
-                            <input type="text" id="dbHostname" placeholder="localhost" required>
-                        </div>
-                        <div>
-                            <label>数据库端口 *</label>
-                            <input type="number" id="dbPort" placeholder="5432" value="5432" required>
-                        </div>
-                        <div>
-                            <label>数据库名 *</label>
-                            <input type="text" id="dbName" placeholder="postgres" required>
-                        </div>
-                        <div>
-                            <label>数据库用户 *</label>
-                            <input type="text" id="dbUser" placeholder="postgres" required>
-                        </div>
-                        <div>
-                            <label>数据库密码 *</label>
-                            <input type="password" id="dbPassword" placeholder="输入密码" required>
-                        </div>
-                        <div>
-                            <label>Schema 名称 *</label>
-                            <input type="text" id="schemaName" placeholder="public" required>
-                        </div>
-                        <div>
-                            <label>表名 *</label>
-                            <input type="text" id="tableName" placeholder="users" required>
-                        </div>
-                        <div>
-                            <label>RocketMQ Topic *</label>
-                            <input type="text" id="rocketmqTopic" placeholder="cdc-events" required>
-                        </div>
-                        <div>
-                            <label>RocketMQ Tag</label>
-                            <input type="text" id="rocketmqTag" placeholder="可选，如: users">
-                        </div>
-                    </div>
-                    <div style="display: flex; gap: 10px; margin-top: 25px;">
-                        <button type="submit" class="btn-primary" style="flex: 1; padding: 12px;">💾 保存配置</button>
-                        <button type="reset" class="btn-warning" style="flex: 1; padding: 12px;">🔄 重置</button>
-                    </div>
-                </form>
-            </div>
-
-            <div class="card">
-                <h2>📋 已保存的配置</h2>
-                <div id="listAlert"></div>
-                <div class="table-container">
-                    <table id="configTable">
-                        <thead>
-                            <tr>
-                                <th>配置名称</th>
-                                <th>数据库</th>
-                                <th>Schema.表</th>
-                                <th>Topic / Tag</th>
-                                <th>状态</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="configTableBody">
-                            <tr>
-                                <td colspan="6" class="empty-state">暂无配置，请添加新配置</td>
-                            </tr>
-                        </tbody>
-                    </table>
+        <!-- 异步发送统计面板 -->
+        <div class="card">
+            <h2>📤 异步事件发送统计</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">总入队事件</div>
+                    <div class="stat-value" id="statTotalEnqueued">0</div>
                 </div>
-            </div>
-        </div>
-
-        <!-- 事件日志标签页 -->
-        <div id="eventlogs" class="tab-content">
-            <div class="card">
-                <h2>📊 事件统计</h2>
-                <div id="eventStatsContainer" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
-                    <div class="stat-card">
-                        <div class="stat-label">待发送</div>
-                        <div class="stat-value" id="statPending">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">已发送</div>
-                        <div class="stat-value" id="statSent" style="color: #28a745;">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">失败</div>
-                        <div class="stat-value" id="statFailed" style="color: #dc3545;">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">重试中</div>
-                        <div class="stat-value" id="statRetry" style="color: #ffc107;">0</div>
-                    </div>
+                <div class="stat-item">
+                    <div class="stat-label">成功发送</div>
+                    <div class="stat-value" id="statTotalSent" style="color: #28a745;">0</div>
                 </div>
-            </div>
-
-            <div class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="margin: 0;">📋 事件日志列表</h2>
-                    <div style="display: flex; gap: 10px;">
-                        <select id="statusFilter" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;">
-                            <option value="">全部状态</option>
-                            <option value="PENDING">待发送</option>
-                            <option value="SENT">已发送</option>
-                            <option value="FAILED">失败</option>
-                            <option value="RETRY">重试中</option>
-                        </select>
-                        <button class="btn-primary btn-small" onclick="refreshEventLogs()">🔄 刷新</button>
-                        <button class="btn-warning btn-small" onclick="retryFailedEvents()">🔁 手动重试</button>
-                    </div>
+                <div class="stat-item">
+                    <div class="stat-label">发送失败</div>
+                    <div class="stat-value" id="statTotalFailed" style="color: #dc3545;">0</div>
                 </div>
-                <div id="eventLogAlert"></div>
-                <div class="table-container">
-                    <table id="eventLogTable">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>配置ID</th>
-                                <th>Topic</th>
-                                <th>Tag</th>
-                                <th>消息Key</th>
-                                <th>状态</th>
-                                <th>重试次数</th>
-                                <th>创建时间</th>
-                                <th>错误信息</th>
-                            </tr>
-                        </thead>
-                        <tbody id="eventLogTableBody">
-                            <tr>
-                                <td colspan="9" class="empty-state">加载中...</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div class="stat-item">
+                    <div class="stat-label">队列中待发送</div>
+                    <div class="stat-value" id="statQueuedSize" style="color: #ffc107;">0</div>
                 </div>
-                <div style="display: flex; justify-content: center; gap: 10px; margin-top: 15px;">
-                    <button class="btn-secondary btn-small" onclick="previousPage()" id="prevBtn">上一页</button>
-                    <span id="pageInfo" style="padding: 8px;">第 1 页</span>
-                    <button class="btn-secondary btn-small" onclick="nextPage()" id="nextBtn">下一页</button>
+                <div class="stat-item">
+                    <div class="stat-label">服务状态</div>
+                    <div class="stat-value" id="statAsyncRunning" style="font-size: 14px;">-</div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script>
-        const API_BASE = '/api';
-        const DATASOURCE_API = '/api/datasource';
-        const PIPELINE_API = '/api/pipeline';
+    <!-- 配置管理标签页 -->
+    <div id="configs" class="tab-content">
+        <div class="card">
+            <h2>📝 新增数据源配置</h2>
+            <div id="formAlert"></div>
+            <form id="configForm">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+                    <div>
+                        <label>配置名称 *</label>
+                        <input type="text" id="configName" placeholder="例如: 生产库用户表" required>
+                    </div>
+                    <div>
+                        <label>数据库主机 *</label>
+                        <input type="text" id="dbHostname" placeholder="localhost" required>
+                    </div>
+                    <div>
+                        <label>数据库端口 *</label>
+                        <input type="number" id="dbPort" placeholder="5432" value="5432" required>
+                    </div>
+                    <div>
+                        <label>数据库名 *</label>
+                        <input type="text" id="dbName" placeholder="postgres" required>
+                    </div>
+                    <div>
+                        <label>数据库用户 *</label>
+                        <input type="text" id="dbUser" placeholder="postgres" required>
+                    </div>
+                    <div>
+                        <label>数据库密码 *</label>
+                        <input type="password" id="dbPassword" placeholder="输入密码" required>
+                    </div>
+                    <div>
+                        <label>Schema 名称 *</label>
+                        <input type="text" id="schemaName" placeholder="public" required>
+                    </div>
+                    <div>
+                        <label>表名 *</label>
+                        <input type="text" id="tableName" placeholder="users" required>
+                    </div>
+                    <div>
+                        <label>RocketMQ Topic *</label>
+                        <input type="text" id="rocketmqTopic" placeholder="cdc-events" required>
+                    </div>
+                    <div>
+                        <label>RocketMQ Tag</label>
+                        <input type="text" id="rocketmqTag" placeholder="可选，如: users">
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 25px;">
+                    <button type="submit" class="btn-primary" style="flex: 1; padding: 12px;">💾 保存配置</button>
+                    <button type="reset" class="btn-warning" style="flex: 1; padding: 12px;">🔄 重置</button>
+                </div>
+            </form>
+        </div>
 
-        // 初始化
-        document.addEventListener('DOMContentLoaded', () => {
-            loadConfigs();
-            refreshAllStatus();
-            setInterval(refreshAllStatus, 5000); // 每5秒刷新一次
-        });
+        <div class="card">
+            <h2>📋 已保存的配置</h2>
+            <div id="listAlert"></div>
+            <div class="table-container">
+                <table id="configTable">
+                    <thead>
+                    <tr>
+                        <th>配置名称</th>
+                        <th>数据库</th>
+                        <th>Schema.表</th>
+                        <th>Topic / Tag</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                    </tr>
+                    </thead>
+                    <tbody id="configTableBody">
+                    <tr>
+                        <td colspan="6" class="empty-state">暂无配置，请添加新配置</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
-        // 表单提交
-        document.getElementById('configForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const config = {
-                name: document.getElementById('configName').value,
-                dbHostname: document.getElementById('dbHostname').value,
-                dbPort: parseInt(document.getElementById('dbPort').value),
-                dbName: document.getElementById('dbName').value,
-                dbUser: document.getElementById('dbUser').value,
-                dbPassword: document.getElementById('dbPassword').value,
-                schemaName: document.getElementById('schemaName').value,
-                tableName: document.getElementById('tableName').value,
-                rocketmqTopic: document.getElementById('rocketmqTopic').value,
-                rocketmqTag: document.getElementById('rocketmqTag').value,
-                isActive: false
-            };
+    <!-- 事件日志标签页 -->
+    <div id="eventlogs" class="tab-content">
+        <div class="card">
+            <h2>📊 事件统计</h2>
+            <div id="eventStatsContainer"
+                 style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                <div class="stat-card">
+                    <div class="stat-label">待发送</div>
+                    <div class="stat-value" id="statPending">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">已发送</div>
+                    <div class="stat-value" id="statSent" style="color: #28a745;">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">失败</div>
+                    <div class="stat-value" id="statFailed" style="color: #dc3545;">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">重试中</div>
+                    <div class="stat-value" id="statRetry" style="color: #ffc107;">0</div>
+                </div>
+            </div>
+        </div>
 
-            try {
-                const response = await fetch(DATASOURCE_API, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
-                });
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2 style="margin: 0;">📋 事件日志列表</h2>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="text" id="searchKeyword" placeholder="搜索 Topic/Tag/配置名称"
+                           style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 200px; height: 50px; ">
+                    <select id="statusFilter"
+                            style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; height: 50px;">
+                        <option value="">全部状态</option>
+                        <option value="PENDING">待发送</option>
+                        <option value="SENT">已发送</option>
+                        <option value="FAILED">失败</option>
+                        <option value="RETRY">重试中</option>
+                    </select>
+                    <button class="btn-primary btn-small"
+                            style="width: auto; min-width: 60px; padding: 0 16px; white-space: nowrap;height: 50px;font-weight: bold;"
+                            onclick="refreshEventLogs()">刷新
+                    </button>
 
-                if (response.ok) {
-                    showAlert('formAlert', '✅ 配置保存成功！', 'success');
-                    document.getElementById('configForm').reset();
-                    loadConfigs();
-                } else {
-                    showAlert('formAlert', '❌ 保存失败，请检查输入', 'error');
-                }
-            } catch (error) {
-                showAlert('formAlert', '❌ 网络错误: ' + error.message, 'error');
+                    <button class="btn-warning btn-small"
+                            style="width: auto; min-width: 80px; padding: 0 16px; white-space: nowrap;height: 50px;font-weight: bold;"
+                            onclick="retryFailedEvents()">手动重试
+                    </button>
+                </div>
+            </div>
+            <div id="eventLogAlert"></div>
+            <div class="table-container">
+                <table id="eventLogTable">
+                    <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>配置名称</th>
+                        <th>Topic</th>
+                        <th>Tag</th>
+                        <th>消息Key</th>
+                        <th>状态</th>
+                        <th>重试次数</th>
+                        <th>创建时间</th>
+                        <th>错误信息</th>
+                    </tr>
+                    </thead>
+                    <tbody id="eventLogTableBody">
+                    <tr>
+                        <td colspan="9" class="empty-state">加载中...</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="display: flex; justify-content: center; gap: 10px; margin-top: 15px;">
+                <button class="btn-secondary btn-small" onclick="previousPage()" id="prevBtn">上一页</button>
+                <span id="pageInfo" style="padding: 8px;">第 1 页</span>
+                <button class="btn-secondary btn-small" onclick="nextPage()" id="nextBtn">下一页</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_BASE = '/api';
+    const DATASOURCE_API = '/api/datasource';
+    const PIPELINE_API = '/api/pipeline';
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', () => {
+        loadConfigs();
+        refreshAllStatus();
+        setInterval(refreshAllStatus, 5000); // 每5秒刷新一次
+    });
+
+    // 表单提交
+    document.getElementById('configForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const config = {
+            name: document.getElementById('configName').value,
+            dbHostname: document.getElementById('dbHostname').value,
+            dbPort: parseInt(document.getElementById('dbPort').value),
+            dbName: document.getElementById('dbName').value,
+            dbUser: document.getElementById('dbUser').value,
+            dbPassword: document.getElementById('dbPassword').value,
+            schemaName: document.getElementById('schemaName').value,
+            tableName: document.getElementById('tableName').value,
+            rocketmqTopic: document.getElementById('rocketmqTopic').value,
+            rocketmqTag: document.getElementById('rocketmqTag').value,
+            isActive: false
+        };
+
+        try {
+            const response = await fetch(DATASOURCE_API, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(config)
+            });
+
+            if (response.ok) {
+                showAlert('formAlert', '✅ 配置保存成功！', 'success');
+                document.getElementById('configForm').reset();
+                loadConfigs();
+            } else {
+                showAlert('formAlert', '❌ 保存失败，请检查输入', 'error');
             }
-        });
+        } catch (error) {
+            showAlert('formAlert', '❌ 网络错误: ' + error.message, 'error');
+        }
+    });
 
-        // 加载配置列表
-        async function loadConfigs() {
-            try {
-                const response = await fetch(DATASOURCE_API);
-                const configs = await response.json();
+    // 加载配置列表
+    async function loadConfigs() {
+        try {
+            const response = await fetch(DATASOURCE_API);
+            const configs = await response.json();
 
-                const tbody = document.getElementById('configTableBody');
-                if (configs.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无配置，请添加新配置</td></tr>';
-                    return;
-                }
+            const tbody = document.getElementById('configTableBody');
+            if (configs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无配置，请添加新配置</td></tr>';
+                return;
+            }
 
-                tbody.innerHTML = configs.map(config => `
+            tbody.innerHTML = configs.map(config => `
                     <tr>
                         <td><strong>${config.name}</strong></td>
                         <td>${config.dbHostname}:${config.dbPort}/${config.dbName}</td>
@@ -712,68 +679,68 @@
                         </td>
                     </tr>
                 `).join('');
-            } catch (error) {
-                showAlert('listAlert', '❌ 加载配置失败: ' + error.message, 'error');
-            }
+        } catch (error) {
+            showAlert('listAlert', '❌ 加载配置失败: ' + error.message, 'error');
         }
+    }
 
-        // 切换配置状态
-        async function toggleConfig(id) {
-            try {
-                const response = await fetch(`${DATASOURCE_API}/${id}/toggle`, {
-                    method: 'POST'
-                });
+    // 切换配置状态
+    async function toggleConfig(id) {
+        try {
+            const response = await fetch(`${DATASOURCE_API}/${id}/toggle`, {
+                method: 'POST'
+            });
 
-                if (response.ok) {
-                    showAlert('listAlert', '✅ 状态已更新', 'success');
-                    loadConfigs();
-                    setTimeout(refreshAllStatus, 1000);
-                } else {
-                    showAlert('listAlert', '❌ 更新失败', 'error');
-                }
-            } catch (error) {
-                showAlert('listAlert', '❌ 网络错误: ' + error.message, 'error');
+            if (response.ok) {
+                showAlert('listAlert', '✅ 状态已更新', 'success');
+                loadConfigs();
+                setTimeout(refreshAllStatus, 1000);
+            } else {
+                showAlert('listAlert', '❌ 更新失败', 'error');
             }
+        } catch (error) {
+            showAlert('listAlert', '❌ 网络错误: ' + error.message, 'error');
         }
+    }
 
-        // 删除配置
-        async function deleteConfig(id) {
-            if (!confirm('确定要删除这个配置吗？')) return;
+    // 删除配置
+    async function deleteConfig(id) {
+        if (!confirm('确定要删除这个配置吗？')) return;
 
-            try {
-                const response = await fetch(`${DATASOURCE_API}/${id}`, {
-                    method: 'DELETE'
-                });
+        try {
+            const response = await fetch(`${DATASOURCE_API}/${id}`, {
+                method: 'DELETE'
+            });
 
-                if (response.ok) {
-                    showAlert('listAlert', '✅ 配置已删除', 'success');
-                    loadConfigs();
-                    setTimeout(refreshAllStatus, 1000);
-                } else {
-                    showAlert('listAlert', '❌ 删除失败', 'error');
-                }
-            } catch (error) {
-                showAlert('listAlert', '❌ 网络错误: ' + error.message, 'error');
+            if (response.ok) {
+                showAlert('listAlert', '✅ 配置已删除', 'success');
+                loadConfigs();
+                setTimeout(refreshAllStatus, 1000);
+            } else {
+                showAlert('listAlert', '❌ 删除失败', 'error');
             }
+        } catch (error) {
+            showAlert('listAlert', '❌ 网络错误: ' + error.message, 'error');
         }
+    }
 
-        // 刷新所有 CDC 管道状态
-        async function refreshAllStatus() {
-            try {
-                const response = await fetch(`${PIPELINE_API}/status`);
-                const pipelines = await response.json();
+    // 刷新所有 CDC 管道状态
+    async function refreshAllStatus() {
+        try {
+            const response = await fetch(`${PIPELINE_API}/status`);
+            const pipelines = await response.json();
 
-                const container = document.getElementById('pipelineContainer');
-                let totalEvents = 0;
+            const container = document.getElementById('pipelineContainer');
+            let totalEvents = 0;
 
-                if (Object.keys(pipelines).length === 0) {
-                    container.innerHTML = '<div class="empty-state">暂无活跃 CDC 管道</div>';
-                    document.getElementById('statActivePipelines').textContent = '0';
-                    document.getElementById('statTotalEvents').textContent = '0';
-                } else {
-                    const cards = Object.values(pipelines).map(pipeline => {
-                        totalEvents += pipeline.processedEvents;
-                        return `
+            if (Object.keys(pipelines).length === 0) {
+                container.innerHTML = '<div class="empty-state">暂无活跃 CDC 管道</div>';
+                document.getElementById('statActivePipelines').textContent = '0';
+                document.getElementById('statTotalEvents').textContent = '0';
+            } else {
+                const cards = Object.values(pipelines).map(pipeline => {
+                    totalEvents += pipeline.processedEvents;
+                    return `
                             <div class="pipeline-card ${pipeline.running ? 'running' : 'stopped'}">
                                 <div class="pipeline-header">
                                     <div class="pipeline-name">${pipeline.configName}</div>
@@ -794,188 +761,200 @@
                                 </div>
                             </div>
                         `;
-                    }).join('');
+                }).join('');
 
-                    container.innerHTML = cards;
-                    document.getElementById('statActivePipelines').textContent = Object.keys(pipelines).length;
-                    document.getElementById('statTotalEvents').textContent = totalEvents;
-                }
-
-                document.getElementById('activePipelineCount').textContent = Object.keys(pipelines).length;
-                document.getElementById('totalEvents').textContent = totalEvents;
-                document.getElementById('statLastUpdate').textContent = new Date().toLocaleTimeString('zh-CN');
-
-                // 刷新异步发送统计
-                await refreshAsyncStats();
-
-            } catch (error) {
-                console.error('刷新管道状态失败:', error);
+                container.innerHTML = cards;
+                document.getElementById('statActivePipelines').textContent = Object.keys(pipelines).length;
+                document.getElementById('statTotalEvents').textContent = totalEvents;
             }
-        }
 
-        // 刷新异步发送统计
-        async function refreshAsyncStats() {
-            try {
-                const response = await fetch(`${PIPELINE_API}/async-stats`);
+            document.getElementById('activePipelineCount').textContent = Object.keys(pipelines).length;
+            document.getElementById('totalEvents').textContent = totalEvents;
+            document.getElementById('statLastUpdate').textContent = new Date().toLocaleTimeString('zh-CN');
+
+            // 刷新异步发送统计
+            await refreshAsyncStats();
+
+        } catch (error) {
+            console.error('刷新管道状态失败:', error);
+        }
+    }
+
+    // 刷新异步发送统计
+    async function refreshAsyncStats() {
+        try {
+            const response = await fetch(`${PIPELINE_API}/async-stats`);
+            const stats = await response.json();
+
+            document.getElementById('statTotalEnqueued').textContent = stats.totalEnqueued;
+            document.getElementById('statTotalSent').textContent = stats.totalSent;
+            document.getElementById('statTotalFailed').textContent = stats.totalFailed;
+            document.getElementById('statQueuedSize').textContent = stats.queuedSize;
+            document.getElementById('statAsyncRunning').textContent = stats.running ? '✓ 运行中' : '○ 已停止';
+
+        } catch (error) {
+            console.error('刷新异步统计失败:', error);
+        }
+    }
+
+    // 停止 CDC 管道
+    async function stopPipeline(configId) {
+        try {
+            const response = await fetch(`${PIPELINE_API}/${configId}/stop`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                showAlert('pipelineAlert', '✅ CDC 管道已停止', 'success');
+                setTimeout(refreshAllStatus, 500);
+            } else {
+                showAlert('pipelineAlert', '❌ 停止失败', 'error');
+            }
+        } catch (error) {
+            showAlert('pipelineAlert', '❌ 网络错误: ' + error.message, 'error');
+        }
+    }
+
+    // 重启 CDC 管道
+    async function restartPipeline(configId) {
+        try {
+            const response = await fetch(`${PIPELINE_API}/${configId}/restart`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                showAlert('pipelineAlert', '✅ CDC 管道已重启', 'success');
+                setTimeout(refreshAllStatus, 500);
+            } else {
+                showAlert('pipelineAlert', '❌ 重启失败', 'error');
+            }
+        } catch (error) {
+            showAlert('pipelineAlert', '❌ 网络错误: ' + error.message, 'error');
+        }
+    }
+
+    // 切换标签页
+    function switchTab(tabName) {
+        // 隐藏所有标签页
+        document.querySelectorAll('.tab-content').forEach(tab => {
+            tab.classList.remove('active');
+        });
+
+        // 移除所有按钮的活跃状态
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            btn.classList.remove('active');
+        });
+
+        // 显示选中的标签页
+        document.getElementById(tabName).classList.add('active');
+
+        // 标记选中的按钮
+        if (event && event.target) {
+            event.target.classList.add('active');
+        }
+    }
+
+    // 显示提示信息
+    function showAlert(elementId, message, type) {
+        const alert = document.getElementById(elementId);
+        alert.textContent = message;
+        alert.className = `alert alert-${type}`;
+        setTimeout(() => {
+            alert.className = 'alert';
+        }, 5000);
+    }
+
+    // ========== 事件日志相关函数 ==========
+    const EVENT_LOG_API = '/api/event-log';
+    let currentPage = 0;
+    let currentStatus = '';
+
+    // 切换标签页时加载事件日志
+    const originalSwitchTab = switchTab;
+    switchTab = function (tabName) {
+        originalSwitchTab.call(this, tabName);
+        if (tabName === 'eventlogs') {
+            refreshEventLogs();
+            refreshEventStats();
+        }
+    };
+
+    // 刷新事件统计
+    async function refreshEventStats() {
+        try {
+            const response = await fetch(`${EVENT_LOG_API}/statistics`);
+            if (response.ok) {
                 const stats = await response.json();
-
-                document.getElementById('statTotalEnqueued').textContent = stats.totalEnqueued;
-                document.getElementById('statTotalSent').textContent = stats.totalSent;
-                document.getElementById('statTotalFailed').textContent = stats.totalFailed;
-                document.getElementById('statQueuedSize').textContent = stats.queuedSize;
-                document.getElementById('statAsyncRunning').textContent = stats.running ? '✓ 运行中' : '○ 已停止';
-
-            } catch (error) {
-                console.error('刷新异步统计失败:', error);
+                document.getElementById('statPending').textContent = stats.PENDING || 0;
+                document.getElementById('statSent').textContent = stats.SENT || 0;
+                document.getElementById('statFailed').textContent = stats.FAILED || 0;
+                document.getElementById('statRetry').textContent = stats.RETRY || 0;
             }
+        } catch (error) {
+            console.error('获取事件统计失败:', error);
+        }
+    }
+
+    // 刷新事件日志列表
+    async function refreshEventLogs() {
+        try {
+            const keyword = document.getElementById('searchKeyword').value.trim();
+            const status = document.getElementById('statusFilter').value;
+
+            let url;
+            if (keyword || status) {
+                // 使用搜索 API
+                const params = new URLSearchParams();
+                params.append('page', currentPage);
+                params.append('size', 20);
+                if (keyword) params.append('keyword', keyword);
+                if (status) params.append('status', status);
+                url = `${EVENT_LOG_API}/search?${params.toString()}`;
+            } else {
+                // 使用默认查询 API
+                url = `${EVENT_LOG_API}?page=${currentPage}&size=20`;
+            }
+
+            const response = await fetch(url);
+            if (response.ok) {
+                const data = await response.json();
+                renderEventLogs(data);
+            } else {
+                showAlert('eventLogAlert', '❌ 加载事件日志失败', 'error');
+            }
+        } catch (error) {
+            showAlert('eventLogAlert', '❌ 网络错误: ' + error.message, 'error');
+        }
+    }
+
+    // 渲染事件日志表格
+    function renderEventLogs(data) {
+        const tbody = document.getElementById('eventLogTableBody');
+
+        if (!data.content || data.content.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无事件日志</td></tr>';
+            return;
         }
 
-        // 停止 CDC 管道
-        async function stopPipeline(configId) {
-            try {
-                const response = await fetch(`${PIPELINE_API}/${configId}/stop`, {
-                    method: 'POST'
-                });
+        const rows = data.content.map(log => {
+            const statusClass = {
+                'PENDING': 'status-badge',
+                'SENT': 'status-badge status-running',
+                'FAILED': 'status-badge status-stopped',
+                'RETRY': 'status-badge'
+            }[log.status] || 'status-badge';
 
-                if (response.ok) {
-                    showAlert('pipelineAlert', '✅ CDC 管道已停止', 'success');
-                    setTimeout(refreshAllStatus, 500);
-                } else {
-                    showAlert('pipelineAlert', '❌ 停止失败', 'error');
-                }
-            } catch (error) {
-                showAlert('pipelineAlert', '❌ 网络错误: ' + error.message, 'error');
-            }
-        }
+            const statusStyle = {
+                'PENDING': 'background: #ffc107; color: #856404;',
+                'SENT': '',
+                'FAILED': '',
+                'RETRY': 'background: #17a2b8; color: #fff;'
+            }[log.status] || '';
 
-        // 重启 CDC 管道
-        async function restartPipeline(configId) {
-            try {
-                const response = await fetch(`${PIPELINE_API}/${configId}/restart`, {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    showAlert('pipelineAlert', '✅ CDC 管道已重启', 'success');
-                    setTimeout(refreshAllStatus, 500);
-                } else {
-                    showAlert('pipelineAlert', '❌ 重启失败', 'error');
-                }
-            } catch (error) {
-                showAlert('pipelineAlert', '❌ 网络错误: ' + error.message, 'error');
-            }
-        }
-
-        // 切换标签页
-        function switchTab(tabName) {
-            // 隐藏所有标签页
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
-
-            // 移除所有按钮的活跃状态
-            document.querySelectorAll('.tab-button').forEach(btn => {
-                btn.classList.remove('active');
-            });
-
-            // 显示选中的标签页
-            document.getElementById(tabName).classList.add('active');
-
-            // 标记选中的按钮
-            if (event && event.target) {
-                event.target.classList.add('active');
-            }
-        }
-
-        // 显示提示信息
-        function showAlert(elementId, message, type) {
-            const alert = document.getElementById(elementId);
-            alert.textContent = message;
-            alert.className = `alert alert-${type}`;
-            setTimeout(() => {
-                alert.className = 'alert';
-            }, 5000);
-        }
-
-        // ========== 事件日志相关函数 ==========
-        const EVENT_LOG_API = '/api/event-log';
-        let currentPage = 0;
-        let currentStatus = '';
-
-        // 切换标签页时加载事件日志
-        const originalSwitchTab = switchTab;
-        switchTab = function(tabName) {
-            originalSwitchTab.call(this, tabName);
-            if (tabName === 'eventlogs') {
-                refreshEventLogs();
-                refreshEventStats();
-            }
-        };
-
-        // 刷新事件统计
-        async function refreshEventStats() {
-            try {
-                const response = await fetch(`${EVENT_LOG_API}/statistics`);
-                if (response.ok) {
-                    const stats = await response.json();
-                    document.getElementById('statPending').textContent = stats.PENDING || 0;
-                    document.getElementById('statSent').textContent = stats.SENT || 0;
-                    document.getElementById('statFailed').textContent = stats.FAILED || 0;
-                    document.getElementById('statRetry').textContent = stats.RETRY || 0;
-                }
-            } catch (error) {
-                console.error('获取事件统计失败:', error);
-            }
-        }
-
-        // 刷新事件日志列表
-        async function refreshEventLogs() {
-            try {
-                currentStatus = document.getElementById('statusFilter').value;
-                let url = currentStatus
-                    ? `${EVENT_LOG_API}/status/${currentStatus}?page=${currentPage}&size=20`
-                    : `${EVENT_LOG_API}?page=${currentPage}&size=20`;
-
-                const response = await fetch(url);
-                if (response.ok) {
-                    const data = await response.json();
-                    renderEventLogs(data);
-                } else {
-                    showAlert('eventLogAlert', '❌ 加载事件日志失败', 'error');
-                }
-            } catch (error) {
-                showAlert('eventLogAlert', '❌ 网络错误: ' + error.message, 'error');
-            }
-        }
-
-        // 渲染事件日志表格
-        function renderEventLogs(data) {
-            const tbody = document.getElementById('eventLogTableBody');
-
-            if (!data.content || data.content.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无事件日志</td></tr>';
-                return;
-            }
-
-            const rows = data.content.map(log => {
-                const statusClass = {
-                    'PENDING': 'status-badge' ,
-                    'SENT': 'status-badge status-running',
-                    'FAILED': 'status-badge status-stopped',
-                    'RETRY': 'status-badge'
-                }[log.status] || 'status-badge';
-
-                const statusStyle = {
-                    'PENDING': 'background: #ffc107; color: #856404;',
-                    'SENT': '',
-                    'FAILED': '',
-                    'RETRY': 'background: #17a2b8; color: #fff;'
-                }[log.status] || '';
-
-                return `
+            return `
                     <tr>
                         <td>${log.id}</td>
-                        <td>${log.configId}</td>
+                        <td>${log.configName}</td>
                         <td>${log.topic}</td>
                         <td>${log.tag || '-'}</td>
                         <td>${log.messageKey || '-'}</td>
@@ -986,73 +965,85 @@
                             title="${log.errorMessage || '-'}">${log.errorMessage || '-'}</td>
                     </tr>
                 `;
-            }).join('');
+        }).join('');
 
-            tbody.innerHTML = rows;
+        tbody.innerHTML = rows;
 
-            // 更新分页信息
-            document.getElementById('pageInfo').textContent = `第 ${data.number + 1} 页 / 共 ${data.totalPages} 页`;
-            document.getElementById('prevBtn').disabled = data.first;
-            document.getElementById('nextBtn').disabled = data.last;
+        // 更新分页信息
+        document.getElementById('pageInfo').textContent = `第 ${data.number + 1} 页 / 共 ${data.totalPages} 页`;
+        document.getElementById('prevBtn').disabled = data.first;
+        document.getElementById('nextBtn').disabled = data.last;
+    }
+
+    // 格式化日期时间
+    function formatDateTime(dateTimeStr) {
+        if (!dateTimeStr) return '-';
+        const date = new Date(dateTimeStr);
+        return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    }
+
+    // 上一页
+    function previousPage() {
+        if (currentPage > 0) {
+            currentPage--;
+            refreshEventLogs();
         }
+    }
 
-        // 格式化日期时间
-        function formatDateTime(dateTimeStr) {
-            if (!dateTimeStr) return '-';
-            const date = new Date(dateTimeStr);
-            return date.toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
+    // 下一页
+    function nextPage() {
+        currentPage++;
+        refreshEventLogs();
+    }
+
+    // 手动触发重试
+    async function retryFailedEvents() {
+        try {
+            const response = await fetch(`${EVENT_LOG_API}/retry`, {method: 'POST'});
+            if (response.ok) {
+                const message = await response.text();
+                showAlert('eventLogAlert', '✅ ' + message, 'success');
+                setTimeout(() => {
+                    refreshEventLogs();
+                    refreshEventStats();
+                }, 1000);
+            } else {
+                showAlert('eventLogAlert', '❌ 重试失败', 'error');
+            }
+        } catch (error) {
+            showAlert('eventLogAlert', '❌ 网络错误: ' + error.message, 'error');
+        }
+    }
+
+    // 状态筛选和搜索变化时重新加载
+    document.addEventListener('DOMContentLoaded', () => {
+        const statusFilter = document.getElementById('statusFilter');
+        const searchKeyword = document.getElementById('searchKeyword');
+
+        if (statusFilter) {
+            statusFilter.addEventListener('change', () => {
+                currentPage = 0;
+                refreshEventLogs();
             });
         }
 
-        // 上一页
-        function previousPage() {
-            if (currentPage > 0) {
-                currentPage--;
-                refreshEventLogs();
-            }
-        }
-
-        // 下一页
-        function nextPage() {
-            currentPage++;
-            refreshEventLogs();
-        }
-
-        // 手动触发重试
-        async function retryFailedEvents() {
-            try {
-                const response = await fetch(`${EVENT_LOG_API}/retry`, { method: 'POST' });
-                if (response.ok) {
-                    const message = await response.text();
-                    showAlert('eventLogAlert', '✅ ' + message, 'success');
-                    setTimeout(() => {
-                        refreshEventLogs();
-                        refreshEventStats();
-                    }, 1000);
-                } else {
-                    showAlert('eventLogAlert', '❌ 重试失败', 'error');
-                }
-            } catch (error) {
-                showAlert('eventLogAlert', '❌ 网络错误: ' + error.message, 'error');
-            }
-        }
-
-        // 状态筛选变化时重新加载
-        document.addEventListener('DOMContentLoaded', () => {
-            const statusFilter = document.getElementById('statusFilter');
-            if (statusFilter) {
-                statusFilter.addEventListener('change', () => {
+        if (searchKeyword) {
+            // 回车键搜索
+            searchKeyword.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
                     currentPage = 0;
                     refreshEventLogs();
-                });
-            }
-        });
-    </script>
+                }
+            });
+        }
+    });
+</script>
 </body>
 </html>

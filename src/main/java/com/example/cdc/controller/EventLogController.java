@@ -1,5 +1,6 @@
 package com.example.cdc.controller;
 
+import com.example.cdc.dto.EventLogDTO;
 import com.example.cdc.model.EventLog;
 import com.example.cdc.service.EventLogService;
 import lombok.RequiredArgsConstructor;
@@ -25,35 +26,48 @@ public class EventLogController {
      * 查询所有事件日志（分页）
      */
     @GetMapping
-    public ResponseEntity<Page<EventLog>> getAllEvents(
+    public ResponseEntity<Page<EventLogDTO>> getAllEvents(
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int size
     ) {
-        return ResponseEntity.ok(eventLogService.getAllEvents(page, size));
+        return ResponseEntity.ok(eventLogService.getAllEventsDTO(page, size));
+    }
+
+    /**
+     * 搜索事件日志（支持 topic、tag、配置名称搜索）
+     */
+    @GetMapping("/search")
+    public ResponseEntity<Page<EventLogDTO>> searchEvents(
+        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) String status,
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "20") int size
+    ) {
+        return ResponseEntity.ok(eventLogService.searchEventsDTO(keyword, status, page, size));
     }
 
     /**
      * 根据配置 ID 查询事件日志（分页）
      */
     @GetMapping("/config/{configId}")
-    public ResponseEntity<Page<EventLog>> getEventsByConfigId(
+    public ResponseEntity<Page<EventLogDTO>> getEventsByConfigId(
         @PathVariable Long configId,
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int size
     ) {
-        return ResponseEntity.ok(eventLogService.getEventsByConfigId(configId, page, size));
+        return ResponseEntity.ok(eventLogService.getEventsByConfigIdDTO(configId, page, size));
     }
 
     /**
      * 根据状态查询事件日志（分页）
      */
     @GetMapping("/status/{status}")
-    public ResponseEntity<Page<EventLog>> getEventsByStatus(
+    public ResponseEntity<Page<EventLogDTO>> getEventsByStatus(
         @PathVariable EventLog.EventStatus status,
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int size
     ) {
-        return ResponseEntity.ok(eventLogService.getEventsByStatus(status, page, size));
+        return ResponseEntity.ok(eventLogService.getEventsByStatusDTO(status, page, size));
     }
 
     /**

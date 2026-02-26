@@ -1,7 +1,10 @@
 package com.example.cdc.service;
 
+import com.example.cdc.dto.EventLogDTO;
 import com.example.cdc.model.EventLog;
+import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.repository.EventLogRepository;
+import com.example.cdc.repository.DataSourceConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -12,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -24,6 +28,7 @@ import java.util.stream.Collectors;
 public class EventLogService {
 
     private final EventLogRepository eventLogRepository;
+    private final DataSourceConfigRepository dataSourceConfigRepository;
 
     /**
      * 记录待发送事件
@@ -113,6 +118,36 @@ public class EventLogService {
     }
 
     /**
+     * 搜索事件日志（支持 topic、tag、配置名称搜索）
+     */
+    public Page<EventLog> searchEvents(String keyword, String statusStr, int page, int size) {
+        EventLog.EventStatus status = null;
+        if (statusStr != null && !statusStr.isEmpty()) {
+            try {
+                status = EventLog.EventStatus.valueOf(statusStr);
+            } catch (IllegalArgumentException e) {
+                log.warn("无效的状态值: {}", statusStr);
+            }
+        }
+
+        // 如果有关键词，尝试通过配置名称查找配置ID
+        if (keyword != null && !keyword.isEmpty()) {
+            List<Long> configIds = dataSourceConfigRepository.findAll().stream()
+                .filter(config -> config.getName().contains(keyword))
+                .map(config -> config.getId())
+                .collect(Collectors.toList());
+
+            // 如果找到匹配的配置，搜索这些配置的事件
+            if (!configIds.isEmpty()) {
+                return eventLogRepository.searchEventsByConfigIds(configIds, keyword, status, PageRequest.of(page, size));
+            }
+        }
+
+        // 否则只按 topic/tag 搜索
+        return eventLogRepository.searchEvents(keyword, status, PageRequest.of(page, size));
+    }
+
+    /**
      * 查询待重试的事件
      */
     public List<EventLog> getPendingRetryEvents() {
@@ -138,5 +173,59 @@ public class EventLogService {
         LocalDateTime cutoffTime = LocalDateTime.now().minusDays(daysToKeep);
         eventLogRepository.deleteByStatusAndCreatedAtBefore(EventLog.EventStatus.SENT, cutoffTime);
         log.info("清理了 {} 之前的已发送事件", cutoffTime);
+    }
+
+    // ========== DTO 转换方法 ==========
+
+    /**
+     * 将 EventLog 转换为 EventLogDTO
+     */
+    private EventLogDTO convertToDTO(EventLog eventLog) {
+        String configName = dataSourceConfigRepository.findById(eventLog.getConfigId())
+            .map(DataSourceConfig::getName)
+            .orElse("未知配置");
+
+        return EventLogDTO.builder()
+            .id(eventLog.getId())
+            .configId(eventLog.getConfigId())
+            .configName(configName)
+            .topic(eventLog.getTopic())
+            .tag(eventLog.getTag())
+            .messageKey(eventLog.getMessageKey())
+            .status(eventLog.getStatus())
+            .retryCount(eventLog.getRetryCount())
+            .maxRetry(eventLog.getMaxRetry())
+            .errorMessage(eventLog.getErrorMessage())
+            .createdAt(eventLog.getCreatedAt())
+            .sentAt(eventLog.getSentAt())
+            .build();
+    }
+
+    /**
+     * 查询所有事件日志（分页，返回 DTO）
+     */
+    public Page<EventLogDTO> getAllEventsDTO(int page, int size) {
+        return getAllEvents(page, size).map(this::convertToDTO);
+    }
+
+    /**
+     * 查询指定配置的事件日志（分页，返回 DTO）
+     */
+    public Page<EventLogDTO> getEventsByConfigIdDTO(Long configId, int page, int size) {
+        return getEventsByConfigId(configId, page, size).map(this::convertToDTO);
+    }
+
+    /**
+     * 查询指定状态的事件日志（分页，返回 DTO）
+     */
+    public Page<EventLogDTO> getEventsByStatusDTO(EventLog.EventStatus status, int page, int size) {
+        return getEventsByStatus(status, page, size).map(this::convertToDTO);
+    }
+
+    /**
+     * 搜索事件日志（支持 topic、tag、配置名称搜索，返回 DTO）
+     */
+    public Page<EventLogDTO> searchEventsDTO(String keyword, String statusStr, int page, int size) {
+        return searchEvents(keyword, statusStr, page, size).map(this::convertToDTO);
     }
 }

@@ -350,12 +350,19 @@ public class MultiConfigCdcPipelineManager {
         private Properties buildDebeziumProperties() {
             Properties props = new Properties();
 
+            // 创建 offsets 目录（如果不存在）
+            java.io.File offsetsDir = new java.io.File("./offsets");
+            if (!offsetsDir.exists()) {
+                offsetsDir.mkdirs();
+                log.info("创建 offsets 目录: {}", offsetsDir.getAbsolutePath());
+            }
+
             // 基础配置
             props.setProperty("name", "debezium-" + config.getId());
             props.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
             props.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
-            props.setProperty("offset.storage.file.filename", "./offsets-" + config.getId() + ".dat");
-            props.setProperty("offset.flush.interval.ms", "60000");
+            props.setProperty("offset.storage.file.filename", "./offsets/offset-" + config.getId() + ".dat");
+            props.setProperty("offset.flush.interval.ms", "2000");
             props.setProperty("topic.prefix", "dbserver-" + config.getId());
             props.setProperty("key.converter.schemas.enable", "false");
             props.setProperty("value.converter.schemas.enable", "false");
@@ -391,9 +398,9 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("snapshot.delay.ms", "5000");
             props.setProperty("snapshot.fetch.size", "2048");
 
-            // Schema History
+            // Schema History - 同样放到 offsets 目录
             props.setProperty("schema.history.internal", "io.debezium.relational.history.FileDatabaseHistory");
-            props.setProperty("schema.history.internal.file.filename", "./schema-history-" + config.getId() + ".dat");
+            props.setProperty("schema.history.internal.file.filename", "./offsets/schema-history-" + config.getId() + ".dat");
 
             // 性能优化
             props.setProperty("max.batch.size", "2048");
@@ -406,21 +413,6 @@ public class MultiConfigCdcPipelineManager {
 
             // 优化：减少 WAL 日志保留时间
             props.setProperty("wal.lsn.flush.interval.ms", "10000");
-            props.setProperty("snapshot.delay.ms", "5000");
-            props.setProperty("snapshot.fetch.size", "2048");
-
-            // Schema History
-            props.setProperty("schema.history.internal", "io.debezium.relational.history.FileDatabaseHistory");
-            props.setProperty("schema.history.internal.file.filename", "./schema-history-" + config.getId() + ".dat");
-
-            // 性能优化
-            props.setProperty("max.batch.size", "2048");
-            props.setProperty("max.queue.size", "8192");
-            props.setProperty("poll.interval.ms", "1000");
-
-            // 连接超时优化
-            props.setProperty("database.connect.timeout.ms", "30000");
-            props.setProperty("database.statement.timeout.ms", "30000");
 
             return props;
         }

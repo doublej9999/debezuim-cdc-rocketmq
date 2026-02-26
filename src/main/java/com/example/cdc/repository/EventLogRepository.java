@@ -44,6 +44,24 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
     List<Object[]> countByStatus();
 
     /**
+     * 搜索事件日志（支持 topic、tag 搜索）
+     */
+    @Query("SELECT e FROM EventLog e WHERE " +
+           "(:keyword IS NULL OR e.topic LIKE %:keyword% OR e.tag LIKE %:keyword%) AND " +
+           "(:status IS NULL OR e.status = :status) " +
+           "ORDER BY e.createdAt DESC")
+    Page<EventLog> searchEvents(String keyword, EventLog.EventStatus status, Pageable pageable);
+
+    /**
+     * 搜索事件日志（支持配置ID、topic、tag 搜索）
+     */
+    @Query("SELECT e FROM EventLog e WHERE " +
+           "(e.configId IN :configIds OR :keyword IS NULL OR e.topic LIKE %:keyword% OR e.tag LIKE %:keyword%) AND " +
+           "(:status IS NULL OR e.status = :status) " +
+           "ORDER BY e.createdAt DESC")
+    Page<EventLog> searchEventsByConfigIds(List<Long> configIds, String keyword, EventLog.EventStatus status, Pageable pageable);
+
+    /**
      * 删除指定时间之前的已发送事件（清理历史数据）
      */
     void deleteByStatusAndCreatedAtBefore(EventLog.EventStatus status, LocalDateTime before);
