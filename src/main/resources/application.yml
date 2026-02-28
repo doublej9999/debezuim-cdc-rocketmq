@@ -5,6 +5,10 @@ spring:
   application:
     name: debezium-cdc-rocketmq
 
+app:
+  cors:
+    allowed-origins: "*"
+
   datasource:
     url: jdbc:postgresql://localhost:5432/postgres
     username: postgres
@@ -29,6 +33,7 @@ rocketmq:
   send-msg-timeout: 3000
   retry-times-when-send-failed: 2
   max-message-size: 4194304
+  orderly-enabled: true
 
 # 异步事件发送配置
 async:
@@ -38,6 +43,7 @@ async:
     sender:
       threads: 4  # 发送线程数
       batch:
+        enabled: false  # 启用批量发送（有序发送时需关闭）
         size: 100  # 批处理大小
         timeout:
           ms: 5000  # 批处理超时（毫秒）

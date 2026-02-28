@@ -17,7 +17,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/event-log")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class EventLogController {
 
     private final EventLogService eventLogService;
@@ -84,8 +83,8 @@ public class EventLogController {
     @PostMapping("/retry")
     public ResponseEntity<String> retryFailedEvents() {
         try {
-            int count = eventLogService.getPendingRetryEvents().size();
-            return ResponseEntity.ok("已触发重试，待重试事件数: " + count);
+            int count = eventLogService.getPendingOrRetryEvents().size();
+            return ResponseEntity.ok("已触发重试，待发送/重试事件数: " + count);
         } catch (Exception e) {
             return ResponseEntity.status(500).body("触发重试失败: " + e.getMessage());
         }
