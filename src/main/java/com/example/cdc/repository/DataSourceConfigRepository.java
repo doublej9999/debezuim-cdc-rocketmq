@@ -2,6 +2,7 @@ package com.example.cdc.repository;
 
 import com.example.cdc.model.DataSourceConfig;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -15,4 +16,7 @@ public interface DataSourceConfigRepository extends JpaRepository<DataSourceConf
     List<DataSourceConfig> findAllByOrderByCreatedAtDesc();
 
     List<DataSourceConfig> findByIdIn(Set<Long> ids);
+
+    @Query("select d.id from DataSourceConfig d where d.name like %:keyword%")
+    List<Long> findIdsByNameContaining(String keyword);
 }

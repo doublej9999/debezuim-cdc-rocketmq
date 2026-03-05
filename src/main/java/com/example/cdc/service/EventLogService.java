@@ -104,10 +104,7 @@ public class EventLogService {
         }
 
         if (keyword != null && !keyword.isEmpty()) {
-            List<Long> configIds = dataSourceConfigRepository.findAll().stream()
-                .filter(config -> config.getName().contains(keyword))
-                .map(DataSourceConfig::getId)
-                .toList();
+            List<Long> configIds = dataSourceConfigRepository.findIdsByNameContaining(keyword);
 
             if (!configIds.isEmpty()) {
                 return eventLogRepository.searchEventsByConfigIds(configIds, keyword, status, PageRequest.of(page, size));
