@@ -40,6 +40,9 @@ public class AsyncEventSenderService {
     @Value("${async.event.retry.enabled:true}")
     private boolean retryEnabled;
 
+    @Value("${async.event.retry.batch.size:200}")
+    private int retryBatchSize;
+
     private BlockingQueue<ChangeEventMessage> eventQueue;
     private ExecutorService senderExecutor;
     private volatile boolean running = false;
@@ -202,7 +205,7 @@ public class AsyncEventSenderService {
         }
 
         try {
-            List<EventLog> pendingEvents = eventLogService.getPendingRetryEvents();
+            List<EventLog> pendingEvents = eventLogService.getPendingRetryEvents(retryBatchSize);
             if (pendingEvents.isEmpty()) {
                 return 0;
             }

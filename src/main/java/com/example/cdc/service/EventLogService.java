@@ -105,7 +105,12 @@ public class EventLogService {
     }
 
     public List<EventLog> getPendingRetryEvents() {
-        return eventLogRepository.findPendingRetryEvents();
+        return getPendingRetryEvents(200);
+    }
+
+    public List<EventLog> getPendingRetryEvents(int limit) {
+        int safeLimit = Math.max(1, limit);
+        return eventLogRepository.findPendingRetryEvents(PageRequest.of(0, safeLimit));
     }
 
     public Map<String, Long> getEventStatistics() {
