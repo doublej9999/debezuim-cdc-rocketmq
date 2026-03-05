@@ -1,13 +1,14 @@
 package com.example.cdc.service;
 
 import com.example.cdc.dto.EventLogDTO;
-import com.example.cdc.model.EventLog;
 import com.example.cdc.model.DataSourceConfig;
-import com.example.cdc.repository.EventLogRepository;
+import com.example.cdc.model.EventLog;
 import com.example.cdc.repository.DataSourceConfigRepository;
+import com.example.cdc.repository.EventLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,13 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
+import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * 事件日志服务
- * 管理 CDC 事件的日志记录、查询和清理
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -30,9 +27,6 @@ public class EventLogService {
     private final EventLogRepository eventLogRepository;
     private final DataSourceConfigRepository dataSourceConfigRepository;
 
-    /**
-     * 记录待发送事件
-     */
     @Transactional
     public EventLog createEventLog(Long configId, String topic, String tag, String key, String body) {
         EventLog eventLog = EventLog.builder()
@@ -51,9 +45,6 @@ public class EventLogService {
         return saved;
     }
 
-    /**
-     * 标记事件为已发送
-     */
     @Transactional
     public void markAsSent(Long eventId) {
         eventLogRepository.findById(eventId).ifPresent(eventLog -> {
@@ -64,9 +55,6 @@ public class EventLogService {
         });
     }
 
-    /**
-     * 标记事件为失败，并记录错误信息
-     */
     @Transactional
     public void markAsFailed(Long eventId, String errorMessage) {
         eventLogRepository.findById(eventId).ifPresent(eventLog -> {
@@ -77,9 +65,6 @@ public class EventLogService {
         });
     }
 
-    /**
-     * 标记事件为待重试
-     */
     @Transactional
     public void markForRetry(Long eventId, String errorMessage) {
         eventLogRepository.findById(eventId).ifPresent(eventLog -> {
@@ -96,30 +81,18 @@ public class EventLogService {
         });
     }
 
-    /**
-     * 查询所有事件日志（分页）
-     */
     public Page<EventLog> getAllEvents(int page, int size) {
         return eventLogRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size));
     }
 
-    /**
-     * 查询指定配置的事件日志（分页）
-     */
     public Page<EventLog> getEventsByConfigId(Long configId, int page, int size) {
         return eventLogRepository.findByConfigIdOrderByCreatedAtDesc(configId, PageRequest.of(page, size));
     }
 
-    /**
-     * 查询指定状态的事件日志（分页）
-     */
     public Page<EventLog> getEventsByStatus(EventLog.EventStatus status, int page, int size) {
         return eventLogRepository.findByStatusOrderByCreatedAtDesc(status, PageRequest.of(page, size));
     }
 
-    /**
-     * 搜索事件日志（支持 topic、tag、配置名称搜索）
-     */
     public Page<EventLog> searchEvents(String keyword, String statusStr, int page, int size) {
         EventLog.EventStatus status = null;
         if (statusStr != null && !statusStr.isEmpty()) {
@@ -130,33 +103,24 @@ public class EventLogService {
             }
         }
 
-        // 如果有关键词，尝试通过配置名称查找配置ID
         if (keyword != null && !keyword.isEmpty()) {
             List<Long> configIds = dataSourceConfigRepository.findAll().stream()
                 .filter(config -> config.getName().contains(keyword))
-                .map(config -> config.getId())
-                .collect(Collectors.toList());
+                .map(DataSourceConfig::getId)
+                .toList();
 
-            // 如果找到匹配的配置，搜索这些配置的事件
             if (!configIds.isEmpty()) {
                 return eventLogRepository.searchEventsByConfigIds(configIds, keyword, status, PageRequest.of(page, size));
             }
         }
 
-        // 否则只按 topic/tag 搜索
         return eventLogRepository.searchEvents(keyword, status, PageRequest.of(page, size));
     }
 
-    /**
-     * 查询待重试的事件
-     */
     public List<EventLog> getPendingRetryEvents() {
         return eventLogRepository.findPendingRetryEvents();
     }
 
-    /**
-     * 获取事件统计信息
-     */
     public Map<String, Long> getEventStatistics() {
         return eventLogRepository.countByStatus().stream()
             .collect(Collectors.toMap(
@@ -165,25 +129,15 @@ public class EventLogService {
             ));
     }
 
-    /**
-     * 清理指定时间之前的已发送事件（保留 7 天）
-     */
     @Transactional
     public void cleanupOldEvents(int daysToKeep) {
         LocalDateTime cutoffTime = LocalDateTime.now().minusDays(daysToKeep);
         eventLogRepository.deleteByStatusAndCreatedAtBefore(EventLog.EventStatus.SENT, cutoffTime);
-        log.info("清理了 {} 之前的已发送事件", cutoffTime);
+        log.info("清理 {} 之前的已发送事件", cutoffTime);
     }
 
-    // ========== DTO 转换方法 ==========
-
-    /**
-     * 将 EventLog 转换为 EventLogDTO
-     */
-    private EventLogDTO convertToDTO(EventLog eventLog) {
-        String configName = dataSourceConfigRepository.findById(eventLog.getConfigId())
-            .map(DataSourceConfig::getName)
-            .orElse("未知配置");
+    private EventLogDTO convertToDTO(EventLog eventLog, Map<Long, String> configNameMap) {
+        String configName = configNameMap.getOrDefault(eventLog.getConfigId(), "未知配置");
 
         return EventLogDTO.builder()
             .id(eventLog.getId())
@@ -201,31 +155,34 @@ public class EventLogService {
             .build();
     }
 
-    /**
-     * 查询所有事件日志（分页，返回 DTO）
-     */
     public Page<EventLogDTO> getAllEventsDTO(int page, int size) {
-        return getAllEvents(page, size).map(this::convertToDTO);
+        return mapToDTOPage(getAllEvents(page, size));
     }
 
-    /**
-     * 查询指定配置的事件日志（分页，返回 DTO）
-     */
     public Page<EventLogDTO> getEventsByConfigIdDTO(Long configId, int page, int size) {
-        return getEventsByConfigId(configId, page, size).map(this::convertToDTO);
+        return mapToDTOPage(getEventsByConfigId(configId, page, size));
     }
 
-    /**
-     * 查询指定状态的事件日志（分页，返回 DTO）
-     */
     public Page<EventLogDTO> getEventsByStatusDTO(EventLog.EventStatus status, int page, int size) {
-        return getEventsByStatus(status, page, size).map(this::convertToDTO);
+        return mapToDTOPage(getEventsByStatus(status, page, size));
     }
 
-    /**
-     * 搜索事件日志（支持 topic、tag、配置名称搜索，返回 DTO）
-     */
     public Page<EventLogDTO> searchEventsDTO(String keyword, String statusStr, int page, int size) {
-        return searchEvents(keyword, statusStr, page, size).map(this::convertToDTO);
+        return mapToDTOPage(searchEvents(keyword, statusStr, page, size));
+    }
+
+    private Page<EventLogDTO> mapToDTOPage(Page<EventLog> events) {
+        Set<Long> configIds = events.getContent().stream()
+            .map(EventLog::getConfigId)
+            .collect(Collectors.toSet());
+
+        Map<Long, String> configNameMap = dataSourceConfigRepository.findByIdIn(configIds).stream()
+            .collect(Collectors.toMap(DataSourceConfig::getId, DataSourceConfig::getName));
+
+        List<EventLogDTO> content = events.getContent().stream()
+            .map(event -> convertToDTO(event, configNameMap))
+            .toList();
+
+        return new PageImpl<>(content, events.getPageable(), events.getTotalElements());
     }
 }
