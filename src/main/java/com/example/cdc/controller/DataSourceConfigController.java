@@ -84,7 +84,25 @@ public class DataSourceConfigController {
             @PathVariable Long id,
             @RequestBody DataSourceConfigRequest request) {
         try {
+            var existingOpt = configService.getConfigById(id);
+            if (existingOpt.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+            boolean wasActive = Boolean.TRUE.equals(existingOpt.get().getIsActive());
+
             DataSourceConfig updated = configService.updateConfig(id, toEntity(request));
+
+            boolean isActive = Boolean.TRUE.equals(updated.getIsActive());
+            if (wasActive != isActive) {
+                if (isActive) {
+                    log.info("更新配置后启用 CDC 管道: {}", id);
+                    pipelineManager.startPipeline(updated);
+                } else {
+                    log.info("更新配置后停用 CDC 管道: {}", id);
+                    pipelineManager.stopPipeline(id);
+                }
+            }
+
             return ResponseEntity.ok(toResponse.apply(updated));
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
