@@ -3,6 +3,7 @@ package com.example.cdc.repository;
 import com.example.cdc.model.EventLog;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -65,4 +66,17 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
      * 删除指定时间之前的已发送事件（清理历史数据）
      */
     void deleteByStatusAndCreatedAtBefore(EventLog.EventStatus status, LocalDateTime before);
+
+    @Modifying
+    @Query("update EventLog e set e.status = 'SENT', e.sentAt = :sentAt where e.id = :eventId")
+    int markAsSent(Long eventId, LocalDateTime sentAt);
+
+    @Modifying
+    @Query("update EventLog e set e.status = 'FAILED', e.errorMessage = :errorMessage where e.id = :eventId")
+    int markAsFailed(Long eventId, String errorMessage);
+
+    @Modifying
+    @Query("update EventLog e set e.status = 'RETRY', e.retryCount = e.retryCount + 1, e.errorMessage = :errorMessage " +
+           "where e.id = :eventId and e.retryCount < e.maxRetry")
+    int markForRetry(Long eventId, String errorMessage);
 }

@@ -47,38 +47,28 @@ public class EventLogService {
 
     @Transactional
     public void markAsSent(Long eventId) {
-        eventLogRepository.findById(eventId).ifPresent(eventLog -> {
-            eventLog.setStatus(EventLog.EventStatus.SENT);
-            eventLog.setSentAt(LocalDateTime.now());
-            eventLogRepository.save(eventLog);
+        int updated = eventLogRepository.markAsSent(eventId, LocalDateTime.now());
+        if (updated > 0) {
             log.debug("事件已发送 - EventId: {}", eventId);
-        });
+        }
     }
 
     @Transactional
     public void markAsFailed(Long eventId, String errorMessage) {
-        eventLogRepository.findById(eventId).ifPresent(eventLog -> {
-            eventLog.setStatus(EventLog.EventStatus.FAILED);
-            eventLog.setErrorMessage(errorMessage);
-            eventLogRepository.save(eventLog);
+        int updated = eventLogRepository.markAsFailed(eventId, errorMessage);
+        if (updated > 0) {
             log.warn("事件发送失败 - EventId: {}, Error: {}", eventId, errorMessage);
-        });
+        }
     }
 
     @Transactional
     public void markForRetry(Long eventId, String errorMessage) {
-        eventLogRepository.findById(eventId).ifPresent(eventLog -> {
-            if (eventLog.getRetryCount() < eventLog.getMaxRetry()) {
-                eventLog.setStatus(EventLog.EventStatus.RETRY);
-                eventLog.setRetryCount(eventLog.getRetryCount() + 1);
-                eventLog.setErrorMessage(errorMessage);
-                eventLogRepository.save(eventLog);
-                log.info("事件标记为重试 - EventId: {}, 重试次数: {}/{}",
-                    eventId, eventLog.getRetryCount(), eventLog.getMaxRetry());
-            } else {
-                markAsFailed(eventId, errorMessage + " (超过最大重试次数)");
-            }
-        });
+        int retryUpdated = eventLogRepository.markForRetry(eventId, errorMessage);
+        if (retryUpdated > 0) {
+            log.info("事件标记为重试 - EventId: {}", eventId);
+            return;
+        }
+        markAsFailed(eventId, errorMessage + " (超过最大重试次数)");
     }
 
     public Page<EventLog> getAllEvents(int page, int size) {
