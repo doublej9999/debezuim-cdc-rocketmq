@@ -1,5 +1,7 @@
 package com.example.cdc.controller;
 
+import com.example.cdc.dto.DataSourceConfigRequest;
+import com.example.cdc.dto.DataSourceConfigResponse;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
@@ -9,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.function.Function;
 
 @Slf4j
 @RestController
@@ -20,34 +23,69 @@ public class DataSourceConfigController {
     private final DataSourceConfigService configService;
     private final MultiConfigCdcPipelineManager pipelineManager;
 
+    private final Function<DataSourceConfig, DataSourceConfigResponse> toResponse = config -> DataSourceConfigResponse.builder()
+            .id(config.getId())
+            .name(config.getName())
+            .dbHostname(config.getDbHostname())
+            .dbPort(config.getDbPort())
+            .dbName(config.getDbName())
+            .dbUser(config.getDbUser())
+            .schemaName(config.getSchemaName())
+            .tableName(config.getTableName())
+            .rocketmqTopic(config.getRocketmqTopic())
+            .rocketmqTag(config.getRocketmqTag())
+            .isActive(config.getIsActive())
+            .createdAt(config.getCreatedAt())
+            .updatedAt(config.getUpdatedAt())
+            .build();
+
+    private DataSourceConfig toEntity(DataSourceConfigRequest request) {
+        DataSourceConfig config = new DataSourceConfig();
+        config.setName(request.getName());
+        config.setDbHostname(request.getDbHostname());
+        config.setDbPort(request.getDbPort());
+        config.setDbName(request.getDbName());
+        config.setDbUser(request.getDbUser());
+        config.setDbPassword(request.getDbPassword());
+        config.setSchemaName(request.getSchemaName());
+        config.setTableName(request.getTableName());
+        config.setRocketmqTopic(request.getRocketmqTopic());
+        config.setRocketmqTag(request.getRocketmqTag());
+        config.setIsActive(request.getIsActive() != null && request.getIsActive());
+        return config;
+    }
+
     @GetMapping
-    public ResponseEntity<List<DataSourceConfig>> getAllConfigs() {
-        return ResponseEntity.ok(configService.getAllConfigs());
+    public ResponseEntity<List<DataSourceConfigResponse>> getAllConfigs() {
+        return ResponseEntity.ok(configService.getAllConfigs().stream().map(toResponse).toList());
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<DataSourceConfig> getConfigById(@PathVariable Long id) {
+    public ResponseEntity<DataSourceConfigResponse> getConfigById(@PathVariable Long id) {
         return configService.getConfigById(id)
+                .map(toResponse)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/active")
-    public ResponseEntity<List<DataSourceConfig>> getActiveConfigs() {
-        return ResponseEntity.ok(configService.getActiveConfigs());
+    public ResponseEntity<List<DataSourceConfigResponse>> getActiveConfigs() {
+        return ResponseEntity.ok(configService.getActiveConfigs().stream().map(toResponse).toList());
     }
 
     @PostMapping
-    public ResponseEntity<DataSourceConfig> createConfig(@RequestBody DataSourceConfig config) {
-        return ResponseEntity.ok(configService.createConfig(config));
+    public ResponseEntity<DataSourceConfigResponse> createConfig(@RequestBody DataSourceConfigRequest request) {
+        DataSourceConfig saved = configService.createConfig(toEntity(request));
+        return ResponseEntity.ok(toResponse.apply(saved));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<DataSourceConfig> updateConfig(
+    public ResponseEntity<DataSourceConfigResponse> updateConfig(
             @PathVariable Long id,
-            @RequestBody DataSourceConfig config) {
+            @RequestBody DataSourceConfigRequest request) {
         try {
-            return ResponseEntity.ok(configService.updateConfig(id, config));
+            DataSourceConfig updated = configService.updateConfig(id, toEntity(request));
+            return ResponseEntity.ok(toResponse.apply(updated));
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         }
@@ -67,7 +105,7 @@ public class DataSourceConfigController {
     }
 
     @PostMapping("/{id}/toggle")
-    public ResponseEntity<DataSourceConfig> toggleActive(@PathVariable Long id) {
+    public ResponseEntity<DataSourceConfigResponse> toggleActive(@PathVariable Long id) {
         try {
             DataSourceConfig config = configService.toggleActive(id);
 
@@ -80,7 +118,7 @@ public class DataSourceConfigController {
                 pipelineManager.stopPipeline(id);
             }
 
-            return ResponseEntity.ok(config);
+            return ResponseEntity.ok(toResponse.apply(config));
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         }
