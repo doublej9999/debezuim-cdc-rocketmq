@@ -1,0 +1,72 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: debezium-cdc-rocketmq
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:5432/postgres
+    username: postgres
+    password: "请替换为生产密码"
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+
+rocketmq:
+  namesrv-addr: 127.0.0.1:9876
+  producer-group: debezium-cdc-producer
+  topic: cdc-events2
+  send-msg-timeout: 3000
+  retry-times-when-send-failed: 2
+  max-message-size: 4194304
+
+async:
+  event:
+    queue:
+      size: 10000
+    sender:
+      threads: 4
+      batch:
+        size: 100
+        timeout:
+          ms: 5000
+    retry:
+      enabled: true
+      interval:
+        seconds: 60
+
+logging:
+  level:
+    root: INFO
+    com.example.cdc: INFO
+    io.debezium: INFO
+    org.apache.rocketmq: INFO
+  file:
+    path: ./logs
+    name: ./logs/app.log
+  logback:
+    rollingpolicy:
+      file-name-pattern: ./logs/app.%d{yyyy-MM-dd}.%i.log.gz
+      max-file-size: 100MB
+      max-history: 30
+      total-size-cap: 10GB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+

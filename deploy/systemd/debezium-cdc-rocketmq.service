@@ -1,0 +1,19 @@
+[Unit]
+Description=Debezium CDC RocketMQ Spring Boot Service
+After=network.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+WorkingDirectory=/opt/debezium-cdc-rocketmq-offline
+EnvironmentFile=-/etc/sysconfig/debezium-cdc-rocketmq
+ExecStart=/usr/bin/java ${JAVA_OPTS} -jar /opt/debezium-cdc-rocketmq-offline/lib/debezium-cdc-rocketmq.jar --spring.profiles.active=prod --spring.config.location=file:/opt/debezium-cdc-rocketmq-offline/config/application-prod.yml
+SuccessExitStatus=143
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+
