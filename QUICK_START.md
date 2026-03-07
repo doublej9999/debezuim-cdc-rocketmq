@@ -197,5 +197,5 @@ setInterval(refreshMonitor, 5000); // 改为需要的间隔（毫秒）
 
 如有问题，请查看：
 - 应用日志：`logs/` 目录
-- 详细文档：`FRONTEND_README.md`
+- 详细文档：`docs/README.md`
 - 项目源码：`src/main/java/com/example/cdc/`
