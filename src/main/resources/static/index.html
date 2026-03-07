@@ -377,9 +377,9 @@
 
     <!-- 标签页 -->
     <div class="tabs">
-        <button class="tab-button active" onclick="switchTab('pipelines')">📊 CDC 管道监控</button>
-        <button class="tab-button" onclick="switchTab('configs')">⚙️ 配置管理</button>
-        <button class="tab-button" onclick="switchTab('eventlogs')">📋 事件日志</button>
+        <button class="tab-button active" data-tab="pipelines" onclick="switchTab('pipelines', this)">📊 CDC 管道监控</button>
+        <button class="tab-button" data-tab="configs" onclick="switchTab('configs', this)">⚙️ 配置管理</button>
+        <button class="tab-button" data-tab="eventlogs" onclick="switchTab('eventlogs', this)">📋 事件日志</button>
     </div>
 
     <!-- CDC 管道监控标签页 -->
@@ -607,6 +607,7 @@
     document.addEventListener('DOMContentLoaded', () => {
         loadConfigs();
         refreshAllStatus();
+        bindEventLogFilters();
         setInterval(refreshAllStatus, 5000); // 每5秒刷新一次
     });
 
@@ -834,7 +835,7 @@
     }
 
     // 切换标签页
-    function switchTab(tabName) {
+    function switchTab(tabName, tabButton) {
         // 隐藏所有标签页
         document.querySelectorAll('.tab-content').forEach(tab => {
             tab.classList.remove('active');
@@ -849,8 +850,9 @@
         document.getElementById(tabName).classList.add('active');
 
         // 标记选中的按钮
-        if (event && event.target) {
-            event.target.classList.add('active');
+        const targetButton = tabButton || document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+        if (targetButton) {
+            targetButton.classList.add('active');
         }
     }
 
@@ -871,8 +873,8 @@
 
     // 切换标签页时加载事件日志
     const originalSwitchTab = switchTab;
-    switchTab = function (tabName) {
-        originalSwitchTab.call(this, tabName);
+    switchTab = function (tabName, tabButton) {
+        originalSwitchTab.call(this, tabName, tabButton);
         if (tabName === 'eventlogs') {
             refreshEventLogs();
             refreshEventStats();
@@ -1022,8 +1024,8 @@
         }
     }
 
-    // 状态筛选和搜索变化时重新加载
-    document.addEventListener('DOMContentLoaded', () => {
+    // 绑定事件日志筛选与搜索事件
+    function bindEventLogFilters() {
         const statusFilter = document.getElementById('statusFilter');
         const searchKeyword = document.getElementById('searchKeyword');
 
@@ -1043,7 +1045,7 @@
                 }
             });
         }
-    });
+    }
 </script>
 </body>
 </html>
