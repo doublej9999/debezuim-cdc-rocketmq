@@ -5,6 +5,7 @@ import com.example.cdc.dto.DataSourceConfigResponse;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -74,7 +75,7 @@ public class DataSourceConfigController {
     }
 
     @PostMapping
-    public ResponseEntity<DataSourceConfigResponse> createConfig(@RequestBody DataSourceConfigRequest request) {
+    public ResponseEntity<DataSourceConfigResponse> createConfig(@Valid @RequestBody DataSourceConfigRequest request) {
         DataSourceConfig saved = configService.createConfig(toEntity(request));
         return ResponseEntity.ok(toResponse.apply(saved));
     }
@@ -82,7 +83,7 @@ public class DataSourceConfigController {
     @PutMapping("/{id}")
     public ResponseEntity<DataSourceConfigResponse> updateConfig(
             @PathVariable Long id,
-            @RequestBody DataSourceConfigRequest request) {
+            @Valid @RequestBody DataSourceConfigRequest request) {
         try {
             var existingOpt = configService.getConfigById(id);
             if (existingOpt.isEmpty()) {
@@ -90,7 +91,11 @@ public class DataSourceConfigController {
             }
             boolean wasActive = Boolean.TRUE.equals(existingOpt.get().getIsActive());
 
-            DataSourceConfig updated = configService.updateConfig(id, toEntity(request));
+            DataSourceConfig requestEntity = toEntity(request);
+            if (request.getIsActive() == null) {
+                requestEntity.setIsActive(existingOpt.get().getIsActive());
+            }
+            DataSourceConfig updated = configService.updateConfig(id, requestEntity);
 
             boolean isActive = Boolean.TRUE.equals(updated.getIsActive());
             if (wasActive != isActive) {
