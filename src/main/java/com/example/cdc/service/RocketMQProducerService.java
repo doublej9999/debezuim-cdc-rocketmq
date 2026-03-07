@@ -39,7 +39,6 @@ public class RocketMQProducerService {
         producer.setSendMsgTimeout(rocketMQConfig.getSendMsgTimeout());
         producer.setRetryTimesWhenSendFailed(rocketMQConfig.getRetryTimesWhenSendFailed());
         producer.setMaxMessageSize(rocketMQConfig.getMaxMessageSize());
-        producer.setSendMsgTimeout(5000);
         producer.setVipChannelEnabled(false);
         producer.start();
 
