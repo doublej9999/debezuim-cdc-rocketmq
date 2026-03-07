@@ -78,6 +78,8 @@ public class EventLogController {
         try {
             eventLogService.cleanupOldEvents(daysToKeep);
             return ResponseEntity.ok("历史事件清理完成");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body("daysToKeep is invalid: " + e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.status(500).body("清理失败: " + e.getMessage());
         }

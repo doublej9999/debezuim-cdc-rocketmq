@@ -123,6 +123,9 @@ public class EventLogService {
 
     @Transactional
     public void cleanupOldEvents(int daysToKeep) {
+        if (daysToKeep < 1 || daysToKeep > 3650) {
+            throw new IllegalArgumentException("daysToKeep must be between 1 and 3650");
+        }
         LocalDateTime cutoffTime = LocalDateTime.now().minusDays(daysToKeep);
         eventLogRepository.deleteByStatusAndCreatedAtBefore(EventLog.EventStatus.SENT, cutoffTime);
         log.info("清理 {} 之前的已发送事件", cutoffTime);
