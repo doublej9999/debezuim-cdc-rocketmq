@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -51,7 +52,9 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
            "(:keyword IS NULL OR e.topic LIKE %:keyword% OR e.tag LIKE %:keyword%) AND " +
            "(:status IS NULL OR e.status = :status) " +
            "ORDER BY e.createdAt DESC")
-    Page<EventLog> searchEvents(String keyword, EventLog.EventStatus status, Pageable pageable);
+    Page<EventLog> searchEvents(@Param("keyword") String keyword,
+                                @Param("status") EventLog.EventStatus status,
+                                Pageable pageable);
 
     /**
      * 搜索事件日志（支持配置ID、topic、tag 搜索）
@@ -60,7 +63,10 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
            "(e.configId IN :configIds OR :keyword IS NULL OR e.topic LIKE %:keyword% OR e.tag LIKE %:keyword%) AND " +
            "(:status IS NULL OR e.status = :status) " +
            "ORDER BY e.createdAt DESC")
-    Page<EventLog> searchEventsByConfigIds(List<Long> configIds, String keyword, EventLog.EventStatus status, Pageable pageable);
+    Page<EventLog> searchEventsByConfigIds(@Param("configIds") List<Long> configIds,
+                                           @Param("keyword") String keyword,
+                                           @Param("status") EventLog.EventStatus status,
+                                           Pageable pageable);
 
     /**
      * 删除指定时间之前的已发送事件（清理历史数据）
@@ -69,14 +75,14 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
 
     @Modifying
     @Query("update EventLog e set e.status = 'SENT', e.sentAt = :sentAt where e.id = :eventId")
-    int markAsSent(Long eventId, LocalDateTime sentAt);
+    int markAsSent(@Param("eventId") Long eventId, @Param("sentAt") LocalDateTime sentAt);
 
     @Modifying
     @Query("update EventLog e set e.status = 'FAILED', e.errorMessage = :errorMessage where e.id = :eventId")
-    int markAsFailed(Long eventId, String errorMessage);
+    int markAsFailed(@Param("eventId") Long eventId, @Param("errorMessage") String errorMessage);
 
     @Modifying
     @Query("update EventLog e set e.status = 'RETRY', e.retryCount = e.retryCount + 1, e.errorMessage = :errorMessage " +
            "where e.id = :eventId and e.retryCount < e.maxRetry")
-    int markForRetry(Long eventId, String errorMessage);
+    int markForRetry(@Param("eventId") Long eventId, @Param("errorMessage") String errorMessage);
 }
