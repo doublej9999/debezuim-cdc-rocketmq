@@ -27,6 +27,9 @@ public class EventLogService {
     private final EventLogRepository eventLogRepository;
     private final DataSourceConfigRepository dataSourceConfigRepository;
 
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 200;
+
     @Transactional
     public EventLog createEventLog(Long configId, String topic, String tag, String key, String body) {
         EventLog eventLog = EventLog.builder()
@@ -72,15 +75,15 @@ public class EventLogService {
     }
 
     public Page<EventLog> getAllEvents(int page, int size) {
-        return eventLogRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size));
+        return eventLogRepository.findAllByOrderByCreatedAtDesc(buildPageRequest(page, size));
     }
 
     public Page<EventLog> getEventsByConfigId(Long configId, int page, int size) {
-        return eventLogRepository.findByConfigIdOrderByCreatedAtDesc(configId, PageRequest.of(page, size));
+        return eventLogRepository.findByConfigIdOrderByCreatedAtDesc(configId, buildPageRequest(page, size));
     }
 
     public Page<EventLog> getEventsByStatus(EventLog.EventStatus status, int page, int size) {
-        return eventLogRepository.findByStatusOrderByCreatedAtDesc(status, PageRequest.of(page, size));
+        return eventLogRepository.findByStatusOrderByCreatedAtDesc(status, buildPageRequest(page, size));
     }
 
     public Page<EventLog> searchEvents(String keyword, String statusStr, int page, int size) {
@@ -97,11 +100,11 @@ public class EventLogService {
             List<Long> configIds = dataSourceConfigRepository.findIdsByNameContaining(keyword);
 
             if (!configIds.isEmpty()) {
-                return eventLogRepository.searchEventsByConfigIds(configIds, keyword, status, PageRequest.of(page, size));
+                return eventLogRepository.searchEventsByConfigIds(configIds, keyword, status, buildPageRequest(page, size));
             }
         }
 
-        return eventLogRepository.searchEvents(keyword, status, PageRequest.of(page, size));
+        return eventLogRepository.searchEvents(keyword, status, buildPageRequest(page, size));
     }
 
     public List<EventLog> getPendingRetryEvents() {
@@ -164,6 +167,12 @@ public class EventLogService {
 
     public Page<EventLogDTO> searchEventsDTO(String keyword, String statusStr, int page, int size) {
         return mapToDTOPage(searchEvents(keyword, statusStr, page, size));
+    }
+
+    private PageRequest buildPageRequest(int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = size < 1 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+        return PageRequest.of(safePage, safeSize);
     }
 
     private Page<EventLogDTO> mapToDTOPage(Page<EventLog> events) {
