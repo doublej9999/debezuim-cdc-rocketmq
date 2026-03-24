@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.exception.MQBrokerException;
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
+import org.apache.rocketmq.client.producer.MessageQueueSelector;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.remoting.exception.RemotingException;
@@ -60,7 +61,17 @@ public class RocketMQProducerService {
         try {
             Message message = new Message(topic, tag, key, body);
 
-            SendResult sendResult = producer.send(message);
+            SendResult sendResult;
+            if (key != null && !key.isBlank()) {
+                // 使用 key 做 sharding，确保同 key 路由到固定队列实现顺序消费
+                MessageQueueSelector selector = (mqs, msg, arg) -> {
+                    int index = Math.floorMod(arg.hashCode(), mqs.size());
+                    return mqs.get(index);
+                };
+                sendResult = producer.send(message, selector, key);
+            } else {
+                sendResult = producer.send(message);
+            }
 
             log.debug("消息发送成功 - Topic: {}, Tag: {}, Key: {}, MsgId: {}, Status: {}",
                 topic, tag, key, sendResult.getMsgId(), sendResult.getSendStatus());
