@@ -1,5 +1,7 @@
 package com.example.cdc.controller;
 
+import com.example.cdc.dto.DataSourceConfigDTO;
+import com.example.cdc.dto.DataSourceConfigUpsertRequest;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
@@ -21,33 +23,34 @@ public class DataSourceConfigController {
     private final MultiConfigCdcPipelineManager pipelineManager;
 
     @GetMapping
-    public ResponseEntity<List<DataSourceConfig>> getAllConfigs() {
-        return ResponseEntity.ok(configService.getAllConfigs());
+    public ResponseEntity<List<DataSourceConfigDTO>> getAllConfigs() {
+        return ResponseEntity.ok(configService.getAllConfigs().stream().map(configService::toDTO).toList());
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<DataSourceConfig> getConfigById(@PathVariable Long id) {
+    public ResponseEntity<DataSourceConfigDTO> getConfigById(@PathVariable Long id) {
         return configService.getConfigById(id)
+                .map(configService::toDTO)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/active")
-    public ResponseEntity<List<DataSourceConfig>> getActiveConfigs() {
-        return ResponseEntity.ok(configService.getActiveConfigs());
+    public ResponseEntity<List<DataSourceConfigDTO>> getActiveConfigs() {
+        return ResponseEntity.ok(configService.getActiveConfigs().stream().map(configService::toDTO).toList());
     }
 
     @PostMapping
-    public ResponseEntity<DataSourceConfig> createConfig(@RequestBody DataSourceConfig config) {
-        return ResponseEntity.ok(configService.createConfig(config));
+    public ResponseEntity<DataSourceConfigDTO> createConfig(@RequestBody DataSourceConfigUpsertRequest config) {
+        return ResponseEntity.ok(configService.toDTO(configService.createConfig(config)));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<DataSourceConfig> updateConfig(
+    public ResponseEntity<DataSourceConfigDTO> updateConfig(
             @PathVariable Long id,
-            @RequestBody DataSourceConfig config) {
+            @RequestBody DataSourceConfigUpsertRequest config) {
         try {
-            return ResponseEntity.ok(configService.updateConfig(id, config));
+            return ResponseEntity.ok(configService.toDTO(configService.updateConfig(id, config)));
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         }
@@ -67,7 +70,7 @@ public class DataSourceConfigController {
     }
 
     @PostMapping("/{id}/toggle")
-    public ResponseEntity<DataSourceConfig> toggleActive(@PathVariable Long id) {
+    public ResponseEntity<DataSourceConfigDTO> toggleActive(@PathVariable Long id) {
         try {
             DataSourceConfig config = configService.toggleActive(id);
 
@@ -80,7 +83,7 @@ public class DataSourceConfigController {
                 pipelineManager.stopPipeline(id);
             }
 
-            return ResponseEntity.ok(config);
+            return ResponseEntity.ok(configService.toDTO(config));
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         }
