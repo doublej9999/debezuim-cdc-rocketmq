@@ -154,6 +154,10 @@ public class EventLogService {
         return eventLogRepository.findPendingRetryEvents();
     }
 
+    public List<EventLog> getPendingOrRetryEvents() {
+        return eventLogRepository.findPendingRetryEvents();
+    }
+
     /**
      * 获取事件统计信息
      */
@@ -180,10 +184,8 @@ public class EventLogService {
     /**
      * 将 EventLog 转换为 EventLogDTO
      */
-    private EventLogDTO convertToDTO(EventLog eventLog) {
-        String configName = dataSourceConfigRepository.findById(eventLog.getConfigId())
-            .map(DataSourceConfig::getName)
-            .orElse("未知配置");
+    private EventLogDTO convertToDTO(EventLog eventLog, Map<Long, String> configNameMap) {
+        String configName = configNameMap.getOrDefault(eventLog.getConfigId(), "未知配置");
 
         return EventLogDTO.builder()
             .id(eventLog.getId())
@@ -201,31 +203,48 @@ public class EventLogService {
             .build();
     }
 
+    private Map<Long, String> buildConfigNameMap(List<EventLog> events) {
+        if (events.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> ids = events.stream().map(EventLog::getConfigId).distinct().toList();
+        return dataSourceConfigRepository.findAllById(ids).stream()
+            .collect(Collectors.toMap(DataSourceConfig::getId, DataSourceConfig::getName));
+    }
+
     /**
      * 查询所有事件日志（分页，返回 DTO）
      */
     public Page<EventLogDTO> getAllEventsDTO(int page, int size) {
-        return getAllEvents(page, size).map(this::convertToDTO);
+        Page<EventLog> eventPage = getAllEvents(page, size);
+        Map<Long, String> configNameMap = buildConfigNameMap(eventPage.getContent());
+        return eventPage.map(event -> convertToDTO(event, configNameMap));
     }
 
     /**
      * 查询指定配置的事件日志（分页，返回 DTO）
      */
     public Page<EventLogDTO> getEventsByConfigIdDTO(Long configId, int page, int size) {
-        return getEventsByConfigId(configId, page, size).map(this::convertToDTO);
+        Page<EventLog> eventPage = getEventsByConfigId(configId, page, size);
+        Map<Long, String> configNameMap = buildConfigNameMap(eventPage.getContent());
+        return eventPage.map(event -> convertToDTO(event, configNameMap));
     }
 
     /**
      * 查询指定状态的事件日志（分页，返回 DTO）
      */
     public Page<EventLogDTO> getEventsByStatusDTO(EventLog.EventStatus status, int page, int size) {
-        return getEventsByStatus(status, page, size).map(this::convertToDTO);
+        Page<EventLog> eventPage = getEventsByStatus(status, page, size);
+        Map<Long, String> configNameMap = buildConfigNameMap(eventPage.getContent());
+        return eventPage.map(event -> convertToDTO(event, configNameMap));
     }
 
     /**
      * 搜索事件日志（支持 topic、tag、配置名称搜索，返回 DTO）
      */
     public Page<EventLogDTO> searchEventsDTO(String keyword, String statusStr, int page, int size) {
-        return searchEvents(keyword, statusStr, page, size).map(this::convertToDTO);
+        Page<EventLog> eventPage = searchEvents(keyword, statusStr, page, size);
+        Map<Long, String> configNameMap = buildConfigNameMap(eventPage.getContent());
+        return eventPage.map(event -> convertToDTO(event, configNameMap));
     }
 }

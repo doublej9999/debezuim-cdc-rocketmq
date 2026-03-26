@@ -12,6 +12,7 @@ import jakarta.annotation.PreDestroy;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 异步事件发送服务
@@ -42,6 +43,9 @@ public class AsyncEventSenderService {
     @Value("${async.event.sender.batch.timeout.ms:5000}")
     private long batchTimeoutMs;
 
+    @Value("${async.event.sender.batch.enabled:false}")
+    private boolean batchEnabled;
+
     @Value("${async.event.retry.enabled:true}")
     private boolean retryEnabled;
 
@@ -70,7 +74,7 @@ public class AsyncEventSenderService {
 
         eventQueue = new LinkedBlockingQueue<>(queueSize);
         senderExecutor = Executors.newFixedThreadPool(senderThreads, r -> {
-            Thread t = new Thread(r, "AsyncEventSender-" + System.nanoTime());
+            Thread t = new Thread(r, "async-event-sender-" + System.nanoTime());
             t.setDaemon(false);
             return t;
         });
@@ -81,6 +85,9 @@ public class AsyncEventSenderService {
         for (int i = 0; i < senderThreads; i++) {
             senderExecutor.submit(this::processBatch);
         }
+
+        // 启动补偿：加载待发送和待重试事件
+        reloadPendingEvents();
 
         log.info("异步事件发送服务已启动");
     }
@@ -139,8 +146,12 @@ public class AsyncEventSenderService {
                 eventQueue.drainTo(batch, batchSize - 1);
 
                 // 发送批次
-                for (ChangeEventMessage message : batch) {
-                    sendSingleMessage(message);
+                if (batchEnabled && !rocketMQProducerService.isOrderlyEnabled()) {
+                    sendBatchMessages(batch);
+                } else {
+                    for (ChangeEventMessage message : batch) {
+                        sendSingleMessage(message);
+                    }
                 }
 
             } catch (InterruptedException e) {
@@ -163,7 +174,11 @@ public class AsyncEventSenderService {
      */
     private void sendSingleMessage(ChangeEventMessage message) {
         try {
-            rocketMQProducerService.sendMessage(message.topic, message.tag, message.key, message.body);
+            if (rocketMQProducerService.isOrderlyEnabled()) {
+                rocketMQProducerService.sendMessageOrdered(message.topic, message.tag, message.key, message.body);
+            } else {
+                rocketMQProducerService.sendMessage(message.topic, message.tag, message.key, message.body);
+            }
             totalSent.incrementAndGet();
 
             // 标记为已发送
@@ -186,6 +201,80 @@ public class AsyncEventSenderService {
             log.error("消息发送失败 - ConfigId: {}, Topic: {}, Tag: {}, EventId: {}, Error: {}",
                 message.configId, message.topic, message.tag, message.eventId, e.getMessage());
             // 不抛出异常，继续处理下一条消息
+        }
+    }
+
+    /**
+     * 批量发送消息（按 topic 分组）
+     */
+    private void sendBatchMessages(List<ChangeEventMessage> batch) {
+        Map<String, List<ChangeEventMessage>> grouped = batch.stream()
+            .collect(java.util.stream.Collectors.groupingBy(m -> m.topic));
+
+        for (Map.Entry<String, List<ChangeEventMessage>> entry : grouped.entrySet()) {
+            List<ChangeEventMessage> messages = entry.getValue();
+            if (messages.isEmpty()) {
+                continue;
+            }
+
+            try {
+                List<org.apache.rocketmq.common.message.Message> rocketMessages = new java.util.ArrayList<>(messages.size());
+                for (ChangeEventMessage message : messages) {
+                    rocketMessages.add(new org.apache.rocketmq.common.message.Message(
+                        message.topic, message.tag, message.key, message.body.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                    ));
+                }
+
+                rocketMQProducerService.sendBatchMessages(rocketMessages);
+
+                for (ChangeEventMessage message : messages) {
+                    totalSent.incrementAndGet();
+                    if (message.eventId != null) {
+                        eventLogService.markAsSent(message.eventId);
+                    }
+                }
+            } catch (Exception e) {
+                for (ChangeEventMessage message : messages) {
+                    totalFailed.incrementAndGet();
+                    if (message.eventId != null && retryEnabled) {
+                        eventLogService.markForRetry(message.eventId, e.getMessage());
+                    } else if (message.eventId != null) {
+                        eventLogService.markAsFailed(message.eventId, e.getMessage());
+                    }
+                }
+                log.error("批量消息发送失败 - Topic: {}, Count: {}, Error: {}",
+                    entry.getKey(), messages.size(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 启动补偿：加载待发送和待重试事件
+     */
+    private void reloadPendingEvents() {
+        try {
+            List<EventLog> pending = eventLogService.getPendingOrRetryEvents();
+            if (pending.isEmpty()) {
+                return;
+            }
+
+            log.info("启动补偿加载 {} 条待发送/重试事件", pending.size());
+            for (EventLog event : pending) {
+                ChangeEventMessage message = new ChangeEventMessage(
+                    event.getTopic(),
+                    event.getTag(),
+                    event.getMessageKey(),
+                    event.getMessageBody(),
+                    event.getConfigId(),
+                    event.getId()
+                );
+                boolean offered = eventQueue.offer(message);
+                if (!offered) {
+                    log.warn("补偿队列已满，事件将保留在数据库待重试 - EventId: {}", event.getId());
+                }
+            }
+        } catch (Exception e) {
+            log.error("启动补偿加载失败: {}", e.getMessage(), e);
         }
     }
 
@@ -236,12 +325,12 @@ public class AsyncEventSenderService {
         }
 
         try {
-            List<EventLog> pendingEvents = eventLogService.getPendingRetryEvents();
+            List<EventLog> pendingEvents = eventLogService.getPendingOrRetryEvents();
             if (pendingEvents.isEmpty()) {
                 return;
             }
 
-            log.info("发现 {} 条待重试事件，开始重试...", pendingEvents.size());
+            log.info("发现 {} 条待发送/重试事件，开始重试...", pendingEvents.size());
 
             for (EventLog event : pendingEvents) {
                 ChangeEventMessage message = new ChangeEventMessage(
