@@ -381,15 +381,15 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("schema.include.list", config.getSchemaName());
             props.setProperty("table.include.list", config.getSchemaName() + "." + config.getTableName());
 
-            // PostgreSQL 特定配置 - 优化 Replication Slot 处理
+            // PostgreSQL 特定配置（仅保留 Debezium Postgres 官方支持项）
             props.setProperty("plugin.name", "pgoutput");
             props.setProperty("slot.name", "debezium_slot_" + config.getId());
             props.setProperty("publication.name", "debezium_publication_" + config.getId());
 
-            // 重要：允许重用已存在的 Replication Slot
+            // 允许重用 replication slot，避免 stop 时删除造成全量重放
             props.setProperty("slot.drop.on.stop", "false");
 
-            // Snapshot 配置 - 优化：如果已有偏移量，跳过快照
+            // Snapshot 配置：有 offset 时自动跳过快照
             props.setProperty("snapshot.mode", "when_needed");
             props.setProperty("snapshot.delay.ms", "5000");
             props.setProperty("snapshot.fetch.size", "2048");
@@ -407,8 +407,6 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("database.connect.timeout.ms", "30000");
             props.setProperty("database.statement.timeout.ms", "30000");
 
-            // 优化：减少 WAL 日志保留时间
-            props.setProperty("wal.lsn.flush.interval.ms", "10000");
 
             return props;
         }
