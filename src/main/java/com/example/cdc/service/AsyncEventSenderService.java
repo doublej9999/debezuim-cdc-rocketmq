@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +57,7 @@ public class AsyncEventSenderService {
     private ExecutorService senderExecutor;
     private volatile boolean running = false;
     private final AtomicLong totalEnqueued = new AtomicLong(0);
+    private final AtomicInteger threadCounter = new AtomicInteger(0);
     private final AtomicLong totalSent = new AtomicLong(0);
     private final AtomicLong totalFailed = new AtomicLong(0);
 
@@ -74,7 +76,7 @@ public class AsyncEventSenderService {
 
         eventQueue = new LinkedBlockingQueue<>(queueSize);
         senderExecutor = Executors.newFixedThreadPool(senderThreads, r -> {
-            Thread t = new Thread(r, "async-event-sender-" + System.nanoTime());
+            Thread t = new Thread(r, "async-event-sender-" + threadCounter.incrementAndGet());
             t.setDaemon(false);
             return t;
         });
