@@ -59,6 +59,7 @@ public class EventLogService {
         eventLogRepository.findById(eventId).ifPresent(eventLog -> {
             eventLog.setStatus(EventLog.EventStatus.SENT);
             eventLog.setSentAt(LocalDateTime.now());
+            eventLog.setNextRetryAt(null);
             eventLogRepository.save(eventLog);
             log.debug("事件已发送 - EventId: {}", eventId);
         });
@@ -87,9 +88,12 @@ public class EventLogService {
                 eventLog.setStatus(EventLog.EventStatus.RETRY);
                 eventLog.setRetryCount(eventLog.getRetryCount() + 1);
                 eventLog.setErrorMessage(errorMessage);
+                // 指数退避：2^retryCount 分钟，最高 30 分钟
+                long delayMinutes = Math.min(30, 1L << Math.min(eventLog.getRetryCount(), 5));
+                eventLog.setNextRetryAt(LocalDateTime.now().plusMinutes(delayMinutes));
                 eventLogRepository.save(eventLog);
-                log.info("事件标记为重试 - EventId: {}, 重试次数: {}/{}",
-                    eventId, eventLog.getRetryCount(), eventLog.getMaxRetry());
+                log.info("事件标记为重试 - EventId: {}, 重试次数: {}/{}, 下次重试: {}",
+                    eventId, eventLog.getRetryCount(), eventLog.getMaxRetry(), eventLog.getNextRetryAt());
             } else {
                 markAsFailed(eventId, errorMessage + " (超过最大重试次数)");
             }

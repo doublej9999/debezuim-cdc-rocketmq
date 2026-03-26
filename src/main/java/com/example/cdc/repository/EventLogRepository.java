@@ -34,7 +34,7 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
     /**
      * 查询待重试的事件（状态为 PENDING 或 RETRY，且重试次数未达上限）
      */
-    @Query("SELECT e FROM EventLog e WHERE (e.status = 'PENDING' OR e.status = 'RETRY') AND e.retryCount < e.maxRetry ORDER BY e.createdAt ASC")
+    @Query("SELECT e FROM EventLog e WHERE (e.status = 'PENDING' OR e.status = 'RETRY') AND e.retryCount < e.maxRetry AND (e.nextRetryAt IS NULL OR e.nextRetryAt <= CURRENT_TIMESTAMP) ORDER BY e.createdAt ASC")
     List<EventLog> findPendingRetryEvents();
 
     /**

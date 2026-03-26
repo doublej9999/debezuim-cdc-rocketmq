@@ -16,7 +16,8 @@ import java.time.LocalDateTime;
 @Table(name = "event_log", indexes = {
     @Index(name = "idx_config_id", columnList = "config_id"),
     @Index(name = "idx_status", columnList = "status"),
-    @Index(name = "idx_created_at", columnList = "created_at")
+    @Index(name = "idx_created_at", columnList = "created_at"),
+    @Index(name = "idx_retry_scan", columnList = "status,retry_count,created_at")
 })
 @Data
 @Builder
@@ -78,6 +79,12 @@ public class EventLog {
     @Column(name = "max_retry", nullable = false)
     @Builder.Default
     private Integer maxRetry = 3;
+
+    /**
+     * 下一次可重试时间
+     */
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
 
     /**
      * 错误信息
