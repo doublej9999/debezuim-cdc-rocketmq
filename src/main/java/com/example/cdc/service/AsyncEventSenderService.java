@@ -1,6 +1,10 @@
 package com.example.cdc.service;
 
 import com.example.cdc.model.EventLog;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,6 +35,7 @@ public class AsyncEventSenderService {
 
     private final RocketMQProducerService rocketMQProducerService;
     private final EventLogService eventLogService;
+    private final MeterRegistry meterRegistry;
 
     @Value("${async.event.queue.size:10000}")
     private int queueSize;
@@ -61,9 +66,15 @@ public class AsyncEventSenderService {
     private final AtomicLong totalSent = new AtomicLong(0);
     private final AtomicLong totalFailed = new AtomicLong(0);
 
-    public AsyncEventSenderService(RocketMQProducerService rocketMQProducerService, EventLogService eventLogService) {
+    private Counter enqueuedCounter;
+    private Counter sentCounter;
+    private Counter failedCounter;
+    private Timer sendTimer;
+
+    public AsyncEventSenderService(RocketMQProducerService rocketMQProducerService, EventLogService eventLogService, MeterRegistry meterRegistry) {
         this.rocketMQProducerService = rocketMQProducerService;
         this.eventLogService = eventLogService;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -75,6 +86,12 @@ public class AsyncEventSenderService {
             queueSize, senderThreads, batchSize);
 
         eventQueue = new LinkedBlockingQueue<>(queueSize);
+
+        this.enqueuedCounter = Counter.builder("cdc_events_enqueued_total").register(meterRegistry);
+        this.sentCounter = Counter.builder("cdc_events_sent_total").register(meterRegistry);
+        this.failedCounter = Counter.builder("cdc_events_failed_total").register(meterRegistry);
+        this.sendTimer = Timer.builder("cdc_event_send_latency").register(meterRegistry);
+        Gauge.builder("cdc_event_queue_size", eventQueue, BlockingQueue::size).register(meterRegistry);
         senderExecutor = Executors.newFixedThreadPool(senderThreads, r -> {
             Thread t = new Thread(r, "async-event-sender-" + threadCounter.incrementAndGet());
             t.setDaemon(false);
@@ -115,15 +132,18 @@ public class AsyncEventSenderService {
             boolean offered = eventQueue.offer(message);
             if (offered) {
                 totalEnqueued.incrementAndGet();
+                enqueuedCounter.increment();
                 log.debug("事件已入队 - ConfigId: {}, Topic: {}, EventId: {}, 队列大小: {}",
                     configId, topic, eventLog.getId(), eventQueue.size());
             } else {
                 totalFailed.incrementAndGet();
+                failedCounter.increment();
                 log.warn("事件队列已满，事件已保存到数据库等待重试 - ConfigId: {}, Topic: {}, EventId: {}",
                     configId, topic, eventLog.getId());
             }
         } catch (Exception e) {
             totalFailed.incrementAndGet();
+            failedCounter.increment();
             log.error("保存事件到数据库失败 - ConfigId: {}, Topic: {}, Error: {}",
                 configId, topic, e.getMessage(), e);
         }
@@ -176,12 +196,16 @@ public class AsyncEventSenderService {
      */
     private void sendSingleMessage(ChangeEventMessage message) {
         try {
+            Timer.Sample sample = Timer.start(meterRegistry);
             if (rocketMQProducerService.isOrderlyEnabled()) {
                 rocketMQProducerService.sendMessageOrdered(message.topic, message.tag, message.key, message.body);
             } else {
                 rocketMQProducerService.sendMessage(message.topic, message.tag, message.key, message.body);
             }
             totalSent.incrementAndGet();
+            sentCounter.increment();
+
+            sample.stop(sendTimer);
 
             // 标记为已发送
             if (message.eventId != null) {
@@ -192,6 +216,7 @@ public class AsyncEventSenderService {
                 message.configId, message.topic, message.tag, message.eventId);
         } catch (Exception e) {
             totalFailed.incrementAndGet();
+            failedCounter.increment();
 
             // 标记为待重试（如果启用重试）
             if (message.eventId != null && retryEnabled) {
@@ -231,6 +256,7 @@ public class AsyncEventSenderService {
 
                 for (ChangeEventMessage message : messages) {
                     totalSent.incrementAndGet();
+            sentCounter.increment();
                     if (message.eventId != null) {
                         eventLogService.markAsSent(message.eventId);
                     }
@@ -238,6 +264,7 @@ public class AsyncEventSenderService {
             } catch (Exception e) {
                 for (ChangeEventMessage message : messages) {
                     totalFailed.incrementAndGet();
+                    failedCounter.increment();
                     if (message.eventId != null && retryEnabled) {
                         eventLogService.markForRetry(message.eventId, e.getMessage());
                     } else if (message.eventId != null) {
