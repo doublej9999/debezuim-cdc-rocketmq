@@ -1,19 +1,24 @@
-package com.example.cdc.service;
-
-import com.example.cdc.model.DataSourceConfig;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import javax.sql.DataSource;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
 public class PgReplicationService {
+
+    // 缓存各个数据源的连接池，避免重复创建连接产生的高昂代价
+    private final Map<Long, HikariDataSource> dataSourceCache = new ConcurrentHashMap<>();
 
     /**
      * 删除复制槽和发布
@@ -102,9 +107,62 @@ public class PgReplicationService {
     }
 
     private Connection getConnection(DataSourceConfig config) throws Exception {
-        String url = String.format("jdbc:postgresql://%s:%d/%s", 
-                config.getDbHostname(), config.getDbPort(), config.getDbName());
-        return DriverManager.getConnection(url, config.getDbUser(), config.getDbPassword());
+        DataSource ds = getDataSource(config);
+        return ds.getConnection();
+    }
+
+    /**
+     * 获取或创建指定配置的连接池
+     */
+    private DataSource getDataSource(DataSourceConfig config) {
+        return dataSourceCache.computeIfAbsent(config.getId(), id -> {
+            log.info("为配置 {} [{}] 创建 Hikari 连接池...", config.getId(), config.getName());
+            
+            HikariConfig hikariConfig = new HikariConfig();
+            String url = String.format("jdbc:postgresql://%s:%d/%s", 
+                    config.getDbHostname(), config.getDbPort(), config.getDbName());
+            
+            hikariConfig.setJdbcUrl(url);
+            hikariConfig.setUsername(config.getDbUser());
+            hikariConfig.setPassword(config.getDbPassword());
+            hikariConfig.setDriverClassName("org.postgresql.Driver");
+            
+            // 针对管理操作（Slot 检查等），连接池不需要很大
+            hikariConfig.setMinimumIdle(1);
+            hikariConfig.setMaximumPoolSize(3);
+            hikariConfig.setIdleTimeout(300000); // 5 分钟闲置释放
+            hikariConfig.setConnectionTimeout(30000);
+            hikariConfig.setPoolName("PgMgmtPool-" + id);
+            
+            // 避免 WAL 检查被长时间查询阻塞
+            hikariConfig.addDataSourceProperty("socketTimeout", "30");
+            
+            return new HikariDataSource(hikariConfig);
+        });
+    }
+
+    /**
+     * 当配置被删除时，清理对应的连接池
+     */
+    public void closeDataSource(Long configId) {
+        HikariDataSource ds = dataSourceCache.remove(configId);
+        if (ds != null) {
+            log.info("正在关闭配置 {} 的连接池...", configId);
+            ds.close();
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("正在关闭所有管理连接池...");
+        dataSourceCache.values().forEach(ds -> {
+            try {
+                ds.close();
+            } catch (Exception e) {
+                log.warn("关闭连接池时出错: {}", e.getMessage());
+            }
+        });
+        dataSourceCache.clear();
     }
 
     @lombok.Data
