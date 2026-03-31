@@ -5,8 +5,8 @@ spring:
   application:
     name: debezium-cdc-rocketmq
   datasource:
-    # Docker 容器访问宿主机 PostgreSQL（Windows/Mac）请使用 host.docker.internal
-    url: jdbc:postgresql://host.docker.internal:5432/postgres
+    # 本地启动请使用 localhost，Docker 容器访问宿主机请使用 host.docker.internal
+    url: jdbc:postgresql://localhost:5432/postgres?sslmode=disable
     username: postgres
     password: 123456
     driver-class-name: org.postgresql.Driver
@@ -20,8 +20,8 @@ spring:
         format_sql: true
 
 rocketmq:
-  # 改成你的外部 RocketMQ NameServer 地址
-  namesrv-addr: 192.168.1.101:9876
+  # 改成你的外部 RocketMQ NameServer 地址，本地启动使用 localhost
+  namesrv-addr: localhost:9876
   producer-group: debezium-cdc-producer
   topic: cdc-events2
   send-msg-timeout: 3000
