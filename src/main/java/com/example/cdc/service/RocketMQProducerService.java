@@ -8,12 +8,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.exception.MQBrokerException;
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
+import org.apache.rocketmq.client.producer.MessageQueueSelector;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,7 +49,18 @@ public class RocketMQProducerService {
         try {
             DefaultMQProducer producer = getProducer(namesrvAddr, producerGroup);
             Message message = new Message(topic, tag, key, body);
-            SendResult sendResult = producer.send(message);
+
+            SendResult sendResult;
+            if (isOrderlyEnabled() && key != null && !key.isBlank()) {
+                // 使用 key 做 sharding，确保同 key 路由到固定队列实现顺序消费
+                MessageQueueSelector selector = (mqs, msg, arg) -> {
+                    int index = Math.floorMod(arg.hashCode(), mqs.size());
+                    return mqs.get(index);
+                };
+                sendResult = producer.send(message, selector, key);
+            } else {
+                sendResult = producer.send(message);
+            }
 
             log.debug("消息发送成功 - NameServer: {}, ProducerGroup: {}, Topic: {}, Tag: {}, Key: {}, MsgId: {}, Status: {}",
                     producer.getNamesrvAddr(), producer.getProducerGroup(), topic, tag, key,
@@ -64,6 +77,24 @@ public class RocketMQProducerService {
 
     public void sendMessage(String topic, String tag, String key, String body) {
         sendMessage(null, null, topic, tag, key, body);
+    }
+
+    /**
+     * 批量发送消息（要求同一 Topic）
+     */
+    public void sendBatchMessages(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        try {
+            SendResult sendResult = defaultProducer.send(messages);
+            log.debug("批量消息发送成功 - Topic: {}, MsgCount: {}, MsgId: {}, Status: {}",
+                messages.get(0).getTopic(), messages.size(), sendResult.getMsgId(), sendResult.getSendStatus());
+        } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
+            log.error("批量消息发送失败 - Topic: {}, MsgCount: {}, Error: {}",
+                messages.get(0).getTopic(), messages.size(), e.getMessage(), e);
+            throw new RuntimeException("RocketMQ 批量消息发送失败", e);
+        }
     }
 
     @PreDestroy
@@ -89,6 +120,10 @@ public class RocketMQProducerService {
 
     public boolean isRunning() {
         return defaultProducer != null;
+    }
+
+    public boolean isOrderlyEnabled() {
+        return Boolean.TRUE.equals(rocketMQConfig.getOrderlyEnabled());
     }
 
     private DefaultMQProducer getProducer(String namesrvAddr, String producerGroup) throws MQClientException {

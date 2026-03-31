@@ -42,4 +42,9 @@ public class RocketMQConfig {
      * 最大消息大小（字节）
      */
     private Integer maxMessageSize = 4194304;
+
+    /**
+     * 是否启用有序发送（相同 key 进入同一队列）
+     */
+    private Boolean orderlyEnabled = true;
 }

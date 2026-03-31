@@ -81,6 +81,12 @@ public class EventLog {
     private Integer maxRetry = 3;
 
     /**
+     * 下一次可重试时间
+     */
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
+
+    /**
      * 错误信息
      */
     @Column(name = "error_message", columnDefinition = "TEXT")

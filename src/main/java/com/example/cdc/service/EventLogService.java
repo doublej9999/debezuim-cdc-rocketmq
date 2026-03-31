@@ -74,12 +74,21 @@ public class EventLogService {
 
     @Transactional
     public void markForRetry(Long eventId, String errorMessage) {
-        int retryUpdated = eventLogRepository.markForRetry(eventId, errorMessage);
-        if (retryUpdated > 0) {
-            log.info("事件标记为重试 - EventId: {}", eventId);
-            return;
-        }
-        markAsFailed(eventId, errorMessage + " (超过最大重试次数)");
+        // 先获取当前重试次数来计算退避时间
+        eventLogRepository.findById(eventId).ifPresent(eventLog -> {
+            int nextRetryCount = eventLog.getRetryCount() + 1;
+            // 指数退避：2^retryCount 分钟，最高 30 分钟
+            long delayMinutes = Math.min(30, 1L << Math.min(nextRetryCount, 5));
+            LocalDateTime nextRetryAt = LocalDateTime.now().plusMinutes(delayMinutes);
+
+            int retryUpdated = eventLogRepository.markForRetry(eventId, errorMessage, nextRetryAt);
+            if (retryUpdated > 0) {
+                log.info("事件标记为重试 - EventId: {}, 重试次数: {}/{}, 下次重试: {}",
+                    eventId, nextRetryCount, eventLog.getMaxRetry(), nextRetryAt);
+                return;
+            }
+            markAsFailed(eventId, errorMessage + " (超过最大重试次数)");
+        });
     }
 
     public Page<EventLog> getAllEvents(int page, int size) {

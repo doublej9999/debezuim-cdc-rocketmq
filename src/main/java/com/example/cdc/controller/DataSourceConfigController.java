@@ -1,13 +1,11 @@
 package com.example.cdc.controller;
 
-import com.example.cdc.dto.DataSourceConfigMapper;
-import com.example.cdc.dto.DataSourceConfigRequest;
-import com.example.cdc.dto.DataSourceConfigResponse;
+import com.example.cdc.dto.DataSourceConfigDTO;
+import com.example.cdc.dto.DataSourceConfigUpsertRequest;
 import com.example.cdc.exception.EntityNotFoundException;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -21,41 +19,39 @@ import java.util.Objects;
 @RestController
 @RequestMapping("/api/datasource")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class DataSourceConfigController {
 
     private final DataSourceConfigService configService;
     private final MultiConfigCdcPipelineManager pipelineManager;
-    private final DataSourceConfigMapper configMapper;
 
     @GetMapping
-    public ResponseEntity<List<DataSourceConfigResponse>> getAllConfigs() {
-        return ResponseEntity.ok(configService.getAllConfigs().stream().map(configMapper::toResponse).toList());
+    public ResponseEntity<List<DataSourceConfigDTO>> getAllConfigs() {
+        return ResponseEntity.ok(configService.getAllConfigs().stream().map(configService::toDTO).toList());
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<DataSourceConfigResponse> getConfigById(@PathVariable Long id) {
+    public ResponseEntity<DataSourceConfigDTO> getConfigById(@PathVariable Long id) {
         return configService.getConfigById(id)
-                .map(configMapper::toResponse)
+                .map(configService::toDTO)
                 .map(ResponseEntity::ok)
                 .orElseThrow(() -> new EntityNotFoundException("配置不存在: " + id));
     }
 
     @GetMapping("/active")
-    public ResponseEntity<List<DataSourceConfigResponse>> getActiveConfigs() {
-        return ResponseEntity.ok(configService.getActiveConfigs().stream().map(configMapper::toResponse).toList());
+    public ResponseEntity<List<DataSourceConfigDTO>> getActiveConfigs() {
+        return ResponseEntity.ok(configService.getActiveConfigs().stream().map(configService::toDTO).toList());
     }
 
     @PostMapping
-    public ResponseEntity<DataSourceConfigResponse> createConfig(@Valid @RequestBody DataSourceConfigRequest request) {
-        DataSourceConfig saved = configService.createConfig(configMapper.toEntity(request));
-        return ResponseEntity.status(HttpStatus.CREATED).body(configMapper.toResponse(saved));
+    public ResponseEntity<DataSourceConfigDTO> createConfig(@RequestBody DataSourceConfigUpsertRequest request) {
+        DataSourceConfig saved = configService.createConfig(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(configService.toDTO(saved));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<DataSourceConfigResponse> updateConfig(
+    public ResponseEntity<DataSourceConfigDTO> updateConfig(
             @PathVariable Long id,
-            @Valid @RequestBody DataSourceConfigRequest request) {
+            @RequestBody DataSourceConfigUpsertRequest request) {
         var existingOpt = configService.getConfigById(id);
         if (existingOpt.isEmpty()) {
             throw new EntityNotFoundException("配置不存在: " + id);
@@ -63,11 +59,7 @@ public class DataSourceConfigController {
         DataSourceConfig existing = existingOpt.get();
         boolean wasActive = Boolean.TRUE.equals(existing.getIsActive());
 
-        DataSourceConfig requestEntity = configMapper.toEntity(request);
-        if (request.getIsActive() == null) {
-            requestEntity.setIsActive(existing.getIsActive());
-        }
-        DataSourceConfig updated = configService.updateConfig(id, requestEntity);
+        DataSourceConfig updated = configService.updateConfig(id, request);
 
         boolean isActive = Boolean.TRUE.equals(updated.getIsActive());
         if (wasActive != isActive) {
@@ -83,7 +75,7 @@ public class DataSourceConfigController {
             pipelineManager.restartPipeline(id);
         }
 
-        return ResponseEntity.ok(configMapper.toResponse(updated));
+        return ResponseEntity.ok(configService.toDTO(updated));
     }
 
     @DeleteMapping("/{id}")
@@ -102,7 +94,7 @@ public class DataSourceConfigController {
     }
 
     @PostMapping("/{id}/toggle")
-    public ResponseEntity<DataSourceConfigResponse> toggleActive(@PathVariable Long id) {
+    public ResponseEntity<DataSourceConfigDTO> toggleActive(@PathVariable Long id) {
         DataSourceConfig config = configService.toggleActive(id);
 
         if (config.getIsActive()) {
@@ -113,7 +105,7 @@ public class DataSourceConfigController {
             pipelineManager.stopPipeline(id);
         }
 
-        return ResponseEntity.ok(configMapper.toResponse(config));
+        return ResponseEntity.ok(configService.toDTO(config));
     }
 
     private boolean hasPipelineSensitiveChanges(DataSourceConfig oldConfig, DataSourceConfig newConfig) {

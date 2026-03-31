@@ -49,8 +49,10 @@ public class MultiConfigCdcPipelineManager {
         log.info("初始化所有活跃的 CDC 管道...");
 
         try {
-            // 创建虚拟线程执行器
-            virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+            // 创建虚拟线程执行器（命名便于排障）
+            virtualThreadExecutor = Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("cdc-vt-", 0).factory()
+            );
 
             // 获取所有活跃配置
             List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
@@ -382,21 +384,15 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("schema.include.list", config.getSchemaName());
             props.setProperty("table.include.list", config.getSchemaName() + "." + config.getTableName());
 
-            // PostgreSQL 特定配置 - 优化 Replication Slot 处理
+            // PostgreSQL 特定配置（仅保留 Debezium Postgres 官方支持项）
             props.setProperty("plugin.name", "pgoutput");
             props.setProperty("slot.name", "debezium_slot_" + config.getId());
             props.setProperty("publication.name", "debezium_publication_" + config.getId());
 
-            // 重要：允许重用已存在的 Replication Slot
+            // 允许重用 replication slot，避免 stop 时删除造成全量重放
             props.setProperty("slot.drop.on.stop", "false");
 
-            // 优化：如果 Slot 已存在，直接使用
-            props.setProperty("replication.slot.name", "debezium_slot_" + config.getId());
-
-            // 优化：如果 Slot 不存在则创建，存在则重用
-            props.setProperty("slot.creation.delay.ms", "5000");
-
-            // Snapshot 配置 - 优化：如果已有偏移量，跳过快照
+            // Snapshot 配置：有 offset 时自动跳过快照
             props.setProperty("snapshot.mode", "when_needed");
             props.setProperty("snapshot.delay.ms", "5000");
             props.setProperty("snapshot.fetch.size", "2048");
@@ -414,8 +410,6 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("database.connect.timeout.ms", "30000");
             props.setProperty("database.statement.timeout.ms", "30000");
 
-            // 优化：减少 WAL 日志保留时间
-            props.setProperty("wal.lsn.flush.interval.ms", "10000");
 
             return props;
         }

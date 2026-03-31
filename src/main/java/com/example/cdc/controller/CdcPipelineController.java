@@ -16,7 +16,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/pipeline")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class CdcPipelineController {
 
     private final MultiConfigCdcPipelineManager pipelineManager;

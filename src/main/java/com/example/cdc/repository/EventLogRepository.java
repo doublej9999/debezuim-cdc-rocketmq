@@ -34,9 +34,10 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
     Page<EventLog> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
     /**
-     * 查询待重试的事件（状态为 PENDING 或 RETRY，且重试次数未达上限）
+     * 查询待重试的事件（状态为 PENDING 或 RETRY，且重试次数未达上限，且已到重试时间）
+     * 支持分页限制批次大小
      */
-    @Query("SELECT e FROM EventLog e WHERE (e.status = 'PENDING' OR e.status = 'RETRY') AND e.retryCount < e.maxRetry ORDER BY e.createdAt ASC")
+    @Query("SELECT e FROM EventLog e WHERE (e.status = 'PENDING' OR e.status = 'RETRY') AND e.retryCount < e.maxRetry AND (e.nextRetryAt IS NULL OR e.nextRetryAt <= CURRENT_TIMESTAMP) ORDER BY e.createdAt ASC")
     List<EventLog> findPendingRetryEvents(Pageable pageable);
 
     /**
@@ -79,7 +80,7 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
     void deleteByCreatedAtBefore(LocalDateTime before);
 
     @Modifying
-    @Query("update EventLog e set e.status = 'SENT', e.sentAt = :sentAt where e.id = :eventId")
+    @Query("update EventLog e set e.status = 'SENT', e.sentAt = :sentAt, e.nextRetryAt = null where e.id = :eventId")
     int markAsSent(@Param("eventId") Long eventId, @Param("sentAt") LocalDateTime sentAt);
 
     @Modifying
@@ -87,7 +88,8 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
     int markAsFailed(@Param("eventId") Long eventId, @Param("errorMessage") String errorMessage);
 
     @Modifying
-    @Query("update EventLog e set e.status = 'RETRY', e.retryCount = e.retryCount + 1, e.errorMessage = :errorMessage " +
-           "where e.id = :eventId and e.retryCount < e.maxRetry")
-    int markForRetry(@Param("eventId") Long eventId, @Param("errorMessage") String errorMessage);
+    @Query("update EventLog e set e.status = 'RETRY', e.retryCount = e.retryCount + 1, e.errorMessage = :errorMessage, " +
+           "e.nextRetryAt = :nextRetryAt where e.id = :eventId and e.retryCount < e.maxRetry")
+    int markForRetry(@Param("eventId") Long eventId, @Param("errorMessage") String errorMessage,
+                     @Param("nextRetryAt") LocalDateTime nextRetryAt);
 }

@@ -14,7 +14,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/event-log")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class EventLogController {
 
     private final EventLogService eventLogService;
