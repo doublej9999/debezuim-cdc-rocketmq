@@ -1,0 +1,17 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: debezium-cdc-rocketmq:local
+    container_name: cdc-app
+    restart: unless-stopped
+    environment:
+      JAVA_OPTS: -Xms512m -Xmx2g -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai
+      SPRING_CONFIG_LOCATION: file:/app/config/application.yml
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./config/application.yml:/app/config/application.yml:ro
+      - ./logs:/app/logs
+      - ./offsets:/app/offsets

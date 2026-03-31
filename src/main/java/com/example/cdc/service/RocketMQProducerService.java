@@ -14,10 +14,13 @@ import org.apache.rocketmq.remoting.exception.RemotingException;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * RocketMQ 生产者服务
- * 负责初始化 DefaultMQProducer 并提供消息发送功能
+ * RocketMQ 生产者服务。
+ * 支持默认生产者和按配置动态路由的生产者实例。
  */
 @Slf4j
 @Service
@@ -25,75 +28,121 @@ import java.nio.charset.StandardCharsets;
 public class RocketMQProducerService {
 
     private final RocketMQConfig rocketMQConfig;
-    private DefaultMQProducer producer;
+    private volatile DefaultMQProducer defaultProducer;
+    private final Map<String, ProducerHolder> dynamicProducers = new ConcurrentHashMap<>();
 
-    /**
-     * 初始化并启动 RocketMQ 生产者
-     */
     @PostConstruct
     public void init() throws MQClientException {
-        log.info("初始化 RocketMQ 生产者...");
+        log.info("初始化 RocketMQ 默认生产者...");
+        defaultProducer = createAndStartProducer(
+                rocketMQConfig.getNamesrvAddr(),
+                rocketMQConfig.getProducerGroup(),
+                "default-producer"
+        );
+        log.info("RocketMQ 默认生产者启动成功 - NameServer: {}, ProducerGroup: {}",
+                rocketMQConfig.getNamesrvAddr(), rocketMQConfig.getProducerGroup());
+    }
 
-        producer = new DefaultMQProducer(rocketMQConfig.getProducerGroup());
-        producer.setNamesrvAddr(rocketMQConfig.getNamesrvAddr());
+    public void sendMessage(String namesrvAddr, String producerGroup, String topic, String tag, String key, byte[] body) {
+        try {
+            DefaultMQProducer producer = getProducer(namesrvAddr, producerGroup);
+            Message message = new Message(topic, tag, key, body);
+            SendResult sendResult = producer.send(message);
+
+            log.debug("消息发送成功 - NameServer: {}, ProducerGroup: {}, Topic: {}, Tag: {}, Key: {}, MsgId: {}, Status: {}",
+                    producer.getNamesrvAddr(), producer.getProducerGroup(), topic, tag, key,
+                    sendResult.getMsgId(), sendResult.getSendStatus());
+        } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
+            log.error("消息发送失败 - Topic: {}, Tag: {}, Key: {}, Error: {}", topic, tag, key, e.getMessage(), e);
+            throw new RuntimeException("RocketMQ 消息发送失败", e);
+        }
+    }
+
+    public void sendMessage(String namesrvAddr, String producerGroup, String topic, String tag, String key, String body) {
+        sendMessage(namesrvAddr, producerGroup, topic, tag, key, body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public void sendMessage(String topic, String tag, String key, String body) {
+        sendMessage(null, null, topic, tag, key, body);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("关闭 RocketMQ 生产者...");
+
+        dynamicProducers.values().forEach(holder -> {
+            try {
+                holder.producer.shutdown();
+            } catch (Exception e) {
+                log.warn("关闭动态生产者失败 - {}: {}", holder.instanceName, e.getMessage());
+            }
+        });
+        dynamicProducers.clear();
+
+        if (defaultProducer != null) {
+            defaultProducer.shutdown();
+            defaultProducer = null;
+        }
+
+        log.info("RocketMQ 生产者已关闭");
+    }
+
+    public boolean isRunning() {
+        return defaultProducer != null;
+    }
+
+    private DefaultMQProducer getProducer(String namesrvAddr, String producerGroup) throws MQClientException {
+        String resolvedNamesrvAddr = normalizeOrDefault(namesrvAddr, rocketMQConfig.getNamesrvAddr());
+        String resolvedProducerGroup = normalizeOrDefault(producerGroup, rocketMQConfig.getProducerGroup());
+
+        boolean useDefault = Objects.equals(resolvedNamesrvAddr, rocketMQConfig.getNamesrvAddr())
+                && Objects.equals(resolvedProducerGroup, rocketMQConfig.getProducerGroup());
+        if (useDefault) {
+            return defaultProducer;
+        }
+
+        String key = resolvedNamesrvAddr + "|" + resolvedProducerGroup;
+        ProducerHolder holder = dynamicProducers.get(key);
+        if (holder != null) {
+            return holder.producer;
+        }
+
+        synchronized (this) {
+            ProducerHolder existing = dynamicProducers.get(key);
+            if (existing != null) {
+                return existing.producer;
+            }
+
+            String instanceName = "dynamic-producer-" + Math.abs(key.hashCode());
+            DefaultMQProducer dynamicProducer = createAndStartProducer(resolvedNamesrvAddr, resolvedProducerGroup, instanceName);
+            dynamicProducers.put(key, new ProducerHolder(dynamicProducer, instanceName));
+            log.info("创建动态生产者成功 - NameServer: {}, ProducerGroup: {}, InstanceName: {}",
+                    resolvedNamesrvAddr, resolvedProducerGroup, instanceName);
+            return dynamicProducer;
+        }
+    }
+
+    private DefaultMQProducer createAndStartProducer(String namesrvAddr, String producerGroup, String instanceName)
+            throws MQClientException {
+        DefaultMQProducer producer = new DefaultMQProducer(producerGroup);
+        producer.setNamesrvAddr(namesrvAddr);
+        producer.setInstanceName(instanceName);
         producer.setSendMsgTimeout(rocketMQConfig.getSendMsgTimeout());
         producer.setRetryTimesWhenSendFailed(rocketMQConfig.getRetryTimesWhenSendFailed());
         producer.setMaxMessageSize(rocketMQConfig.getMaxMessageSize());
         producer.setVipChannelEnabled(false);
         producer.start();
-
-        log.info("RocketMQ 生产者启动成功 - NameServer: {}, ProducerGroup: {}",
-            rocketMQConfig.getNamesrvAddr(),
-            rocketMQConfig.getProducerGroup());
+        return producer;
     }
 
-    /**
-     * 发送消息到 RocketMQ
-     *
-     * @param topic 主题
-     * @param tag 标签（表名）
-     * @param key 消息键（主键）
-     * @param body 消息体（Debezium 原始 JSON）
-     */
-    public void sendMessage(String topic, String tag, String key, byte[] body) {
-        try {
-            Message message = new Message(topic, tag, key, body);
-
-            SendResult sendResult = producer.send(message);
-
-            log.debug("消息发送成功 - Topic: {}, Tag: {}, Key: {}, MsgId: {}, Status: {}",
-                topic, tag, key, sendResult.getMsgId(), sendResult.getSendStatus());
-
-        } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
-            log.error("消息发送失败 - Topic: {}, Tag: {}, Key: {}, Error: {}",
-                topic, tag, key, e.getMessage(), e);
-            throw new RuntimeException("RocketMQ 消息发送失败", e);
+    private String normalizeOrDefault(String value, String defaultValue) {
+        if (value == null) {
+            return defaultValue;
         }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? defaultValue : trimmed;
     }
 
-    /**
-     * 发送消息（字符串版本）
-     */
-    public void sendMessage(String topic, String tag, String key, String body) {
-        sendMessage(topic, tag, key, body.getBytes(StandardCharsets.UTF_8));
-    }
-
-    /**
-     * 优雅关闭生产者
-     */
-    @PreDestroy
-    public void shutdown() {
-        if (producer != null) {
-            log.info("关闭 RocketMQ 生产者...");
-            producer.shutdown();
-            log.info("RocketMQ 生产者已关闭");
-        }
-    }
-
-    /**
-     * 检查生产者是否正在运行
-     */
-    public boolean isRunning() {
-        return producer != null;
+    private record ProducerHolder(DefaultMQProducer producer, String instanceName) {
     }
 }

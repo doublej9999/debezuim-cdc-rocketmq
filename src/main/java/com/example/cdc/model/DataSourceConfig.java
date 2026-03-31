@@ -1,5 +1,6 @@
 package com.example.cdc.model;
 
+import com.example.cdc.config.AesEncryptor;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -28,6 +29,7 @@ public class DataSourceConfig {
     @Column(name = "db_user", nullable = false)
     private String dbUser;
 
+    @Convert(converter = AesEncryptor.class)
     @Column(name = "db_password", nullable = false)
     private String dbPassword;
 
@@ -42,6 +44,15 @@ public class DataSourceConfig {
 
     @Column(name = "rocketmq_tag")
     private String rocketmqTag;
+
+    @Column(name = "rocketmq_namesrv_addr")
+    private String rocketmqNamesrvAddr;
+
+    @Column(name = "rocketmq_producer_group")
+    private String rocketmqProducerGroup;
+
+    @Column(name = "offset_key", length = 64)
+    private String offsetKey;
 
     @Column(name = "is_active")
     private Boolean isActive = false;

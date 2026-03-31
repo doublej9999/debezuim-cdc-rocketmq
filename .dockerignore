@@ -1,0 +1,12 @@
+.git
+.gitignore
+.idea
+.claude
+
+target
+logs
+offsets
+
+deploy
+docs
+*.md

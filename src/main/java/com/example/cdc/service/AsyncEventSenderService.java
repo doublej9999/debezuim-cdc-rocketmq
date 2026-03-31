@@ -75,15 +75,19 @@ public class AsyncEventSenderService {
         log.info("异步事件发送服务已启动");
     }
 
-    public void enqueueEvent(String topic, String tag, String key, String body, Long configId) {
+    public void enqueueEvent(String topic, String tag, String key, String body, Long configId,
+                             String namesrvAddr, String producerGroup) {
         if (!running) {
             log.warn("异步发送服务未运行，事件被丢弃 - ConfigId: {}, Topic: {}", configId, topic);
             return;
         }
 
         try {
-            EventLog eventLog = eventLogService.createEventLog(configId, topic, tag, key, body);
-            ChangeEventMessage message = new ChangeEventMessage(topic, tag, key, body, configId, eventLog.getId());
+            EventLog eventLog = eventLogService.createEventLog(configId, topic, tag, key, body,
+                    namesrvAddr, producerGroup);
+            ChangeEventMessage message = new ChangeEventMessage(
+                topic, tag, key, body, configId, eventLog.getId(), namesrvAddr, producerGroup
+            );
 
             boolean offered = eventQueue.offer(message);
             if (offered) {
@@ -136,7 +140,9 @@ public class AsyncEventSenderService {
 
     private void sendSingleMessage(ChangeEventMessage message) {
         try {
-            rocketMQProducerService.sendMessage(message.topic, message.tag, message.key, message.body);
+            rocketMQProducerService.sendMessage(
+                message.namesrvAddr, message.producerGroup, message.topic, message.tag, message.key, message.body
+            );
             totalSent.incrementAndGet();
 
             if (message.eventId != null) {
@@ -220,7 +226,9 @@ public class AsyncEventSenderService {
                     event.getMessageKey(),
                     event.getMessageBody(),
                     event.getConfigId(),
-                    event.getId()
+                    event.getId(),
+                    event.getNamesrvAddr(),
+                    event.getProducerGroup()
                 );
                 sendSingleMessage(message);
                 processed++;
@@ -252,14 +260,19 @@ public class AsyncEventSenderService {
         private final String body;
         private final Long configId;
         private final Long eventId;
+        private final String namesrvAddr;
+        private final String producerGroup;
 
-        public ChangeEventMessage(String topic, String tag, String key, String body, Long configId, Long eventId) {
+        public ChangeEventMessage(String topic, String tag, String key, String body,
+                                  Long configId, Long eventId, String namesrvAddr, String producerGroup) {
             this.topic = topic;
             this.tag = tag;
             this.key = key;
             this.body = body;
             this.configId = configId;
             this.eventId = eventId;
+            this.namesrvAddr = namesrvAddr;
+            this.producerGroup = producerGroup;
         }
     }
 

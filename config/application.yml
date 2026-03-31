@@ -4,13 +4,12 @@ server:
 spring:
   application:
     name: debezium-cdc-rocketmq
-
   datasource:
-    url: jdbc:postgresql://localhost:5432/postgres
+    # Docker 容器访问宿主机 PostgreSQL（Windows/Mac）请使用 host.docker.internal
+    url: jdbc:postgresql://host.docker.internal:5432/postgres
     username: postgres
     password: 123456
     driver-class-name: org.postgresql.Driver
-
   jpa:
     hibernate:
       ddl-auto: update
@@ -20,34 +19,30 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
-
-# RocketMQ 配置
 rocketmq:
-  namesrv-addr: localhost:9876
+  # 改成你的外部 RocketMQ NameServer 地址
+  namesrv-addr: 192.168.1.101:9876
   producer-group: debezium-cdc-producer
   topic: cdc-events2
   send-msg-timeout: 3000
   retry-times-when-send-failed: 2
   max-message-size: 4194304
 
-# 异步事件发送配置
 async:
   event:
     queue:
-      size: 10000  # 事件队列大小
+      size: 10000
     sender:
-      threads: 4  # 发送线程数
+      threads: 4
       batch:
-        size: 100  # 批处理大小
+        size: 100
         timeout:
-          ms: 5000  # 批处理超时（毫秒）
+          ms: 5000
     retry:
-      enabled: true  # 启用重试机制
+      enabled: true
       interval:
-        seconds: 60  # 重试间隔（秒）
+        seconds: 60
 
-
-# 日志配置
 logging:
   level:
     root: INFO
@@ -57,7 +52,6 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 
-# Actuator 配置
 management:
   endpoints:
     web:

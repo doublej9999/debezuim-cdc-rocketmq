@@ -18,6 +18,9 @@ public class DataSourceConfigResponse {
     String tableName;
     String rocketmqTopic;
     String rocketmqTag;
+    String rocketmqNamesrvAddr;
+    String rocketmqProducerGroup;
+    String offsetKey;
     Boolean isActive;
     LocalDateTime createdAt;
     LocalDateTime updatedAt;

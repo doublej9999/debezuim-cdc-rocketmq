@@ -1,5 +1,6 @@
 package com.example.cdc.service;
 
+import com.example.cdc.exception.EntityNotFoundException;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.repository.DataSourceConfigRepository;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -31,6 +33,7 @@ public class DataSourceConfigService {
 
     @Transactional
     public DataSourceConfig createConfig(DataSourceConfig config) {
+        ensureOffsetKey(config, null, true);
         log.info("创建数据源配置: {}", config.getName());
         return repository.save(config);
     }
@@ -49,11 +52,14 @@ public class DataSourceConfigService {
                     existing.setTableName(config.getTableName());
                     existing.setRocketmqTopic(config.getRocketmqTopic());
                     existing.setRocketmqTag(config.getRocketmqTag());
+                    existing.setRocketmqNamesrvAddr(config.getRocketmqNamesrvAddr());
+                    existing.setRocketmqProducerGroup(config.getRocketmqProducerGroup());
                     existing.setIsActive(config.getIsActive());
+                    ensureOffsetKey(existing, config.getOffsetKey(), false);
                     log.info("更新数据源配置: {}", existing.getName());
                     return repository.save(existing);
                 })
-                .orElseThrow(() -> new RuntimeException("配置不存在: " + id));
+                .orElseThrow(() -> new EntityNotFoundException("配置不存在: " + id));
     }
 
     @Transactional
@@ -70,6 +76,32 @@ public class DataSourceConfigService {
                     log.info("切换数据源配置状态: {} -> {}", config.getName(), config.getIsActive());
                     return repository.save(config);
                 })
-                .orElseThrow(() -> new RuntimeException("配置不存在: " + id));
+                .orElseThrow(() -> new EntityNotFoundException("配置不存在: " + id));
+    }
+
+    private void ensureOffsetKey(DataSourceConfig config, String requestOffsetKey, boolean createMode) {
+        String normalizedRequestKey = normalize(requestOffsetKey);
+        if (normalizedRequestKey != null) {
+            config.setOffsetKey(normalizedRequestKey);
+            return;
+        }
+
+        String existingKey = normalize(config.getOffsetKey());
+        if (existingKey != null) {
+            config.setOffsetKey(existingKey);
+            return;
+        }
+
+        if (createMode) {
+            config.setOffsetKey("cfg-" + UUID.randomUUID().toString().replace("-", ""));
+        }
+    }
+
+    private String normalize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

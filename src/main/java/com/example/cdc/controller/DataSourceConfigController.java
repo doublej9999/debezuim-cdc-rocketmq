@@ -1,18 +1,21 @@
 package com.example.cdc.controller;
 
+import com.example.cdc.dto.DataSourceConfigMapper;
 import com.example.cdc.dto.DataSourceConfigRequest;
 import com.example.cdc.dto.DataSourceConfigResponse;
+import com.example.cdc.exception.EntityNotFoundException;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.function.Function;
+import java.util.Objects;
 
 @Slf4j
 @RestController
@@ -23,101 +26,72 @@ public class DataSourceConfigController {
 
     private final DataSourceConfigService configService;
     private final MultiConfigCdcPipelineManager pipelineManager;
-
-    private final Function<DataSourceConfig, DataSourceConfigResponse> toResponse = config -> DataSourceConfigResponse.builder()
-            .id(config.getId())
-            .name(config.getName())
-            .dbHostname(config.getDbHostname())
-            .dbPort(config.getDbPort())
-            .dbName(config.getDbName())
-            .dbUser(config.getDbUser())
-            .schemaName(config.getSchemaName())
-            .tableName(config.getTableName())
-            .rocketmqTopic(config.getRocketmqTopic())
-            .rocketmqTag(config.getRocketmqTag())
-            .isActive(config.getIsActive())
-            .createdAt(config.getCreatedAt())
-            .updatedAt(config.getUpdatedAt())
-            .build();
-
-    private DataSourceConfig toEntity(DataSourceConfigRequest request) {
-        DataSourceConfig config = new DataSourceConfig();
-        config.setName(request.getName());
-        config.setDbHostname(request.getDbHostname());
-        config.setDbPort(request.getDbPort());
-        config.setDbName(request.getDbName());
-        config.setDbUser(request.getDbUser());
-        config.setDbPassword(request.getDbPassword());
-        config.setSchemaName(request.getSchemaName());
-        config.setTableName(request.getTableName());
-        config.setRocketmqTopic(request.getRocketmqTopic());
-        config.setRocketmqTag(request.getRocketmqTag());
-        config.setIsActive(request.getIsActive() != null && request.getIsActive());
-        return config;
-    }
+    private final DataSourceConfigMapper configMapper;
 
     @GetMapping
     public ResponseEntity<List<DataSourceConfigResponse>> getAllConfigs() {
-        return ResponseEntity.ok(configService.getAllConfigs().stream().map(toResponse).toList());
+        return ResponseEntity.ok(configService.getAllConfigs().stream().map(configMapper::toResponse).toList());
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<DataSourceConfigResponse> getConfigById(@PathVariable Long id) {
         return configService.getConfigById(id)
-                .map(toResponse)
+                .map(configMapper::toResponse)
                 .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+                .orElseThrow(() -> new EntityNotFoundException("配置不存在: " + id));
     }
 
     @GetMapping("/active")
     public ResponseEntity<List<DataSourceConfigResponse>> getActiveConfigs() {
-        return ResponseEntity.ok(configService.getActiveConfigs().stream().map(toResponse).toList());
+        return ResponseEntity.ok(configService.getActiveConfigs().stream().map(configMapper::toResponse).toList());
     }
 
     @PostMapping
     public ResponseEntity<DataSourceConfigResponse> createConfig(@Valid @RequestBody DataSourceConfigRequest request) {
-        DataSourceConfig saved = configService.createConfig(toEntity(request));
-        return ResponseEntity.ok(toResponse.apply(saved));
+        DataSourceConfig saved = configService.createConfig(configMapper.toEntity(request));
+        return ResponseEntity.status(HttpStatus.CREATED).body(configMapper.toResponse(saved));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<DataSourceConfigResponse> updateConfig(
             @PathVariable Long id,
             @Valid @RequestBody DataSourceConfigRequest request) {
-        try {
-            var existingOpt = configService.getConfigById(id);
-            if (existingOpt.isEmpty()) {
-                return ResponseEntity.notFound().build();
-            }
-            boolean wasActive = Boolean.TRUE.equals(existingOpt.get().getIsActive());
-
-            DataSourceConfig requestEntity = toEntity(request);
-            if (request.getIsActive() == null) {
-                requestEntity.setIsActive(existingOpt.get().getIsActive());
-            }
-            DataSourceConfig updated = configService.updateConfig(id, requestEntity);
-
-            boolean isActive = Boolean.TRUE.equals(updated.getIsActive());
-            if (wasActive != isActive) {
-                if (isActive) {
-                    log.info("更新配置后启用 CDC 管道: {}", id);
-                    pipelineManager.startPipeline(updated);
-                } else {
-                    log.info("更新配置后停用 CDC 管道: {}", id);
-                    pipelineManager.stopPipeline(id);
-                }
-            }
-
-            return ResponseEntity.ok(toResponse.apply(updated));
-        } catch (RuntimeException e) {
-            return ResponseEntity.notFound().build();
+        var existingOpt = configService.getConfigById(id);
+        if (existingOpt.isEmpty()) {
+            throw new EntityNotFoundException("配置不存在: " + id);
         }
+        DataSourceConfig existing = existingOpt.get();
+        boolean wasActive = Boolean.TRUE.equals(existing.getIsActive());
+
+        DataSourceConfig requestEntity = configMapper.toEntity(request);
+        if (request.getIsActive() == null) {
+            requestEntity.setIsActive(existing.getIsActive());
+        }
+        DataSourceConfig updated = configService.updateConfig(id, requestEntity);
+
+        boolean isActive = Boolean.TRUE.equals(updated.getIsActive());
+        if (wasActive != isActive) {
+            if (isActive) {
+                log.info("更新配置后启用 CDC 管道: {}", id);
+                pipelineManager.startPipeline(updated);
+            } else {
+                log.info("更新配置后停用 CDC 管道: {}", id);
+                pipelineManager.stopPipeline(id);
+            }
+        } else if (isActive && hasPipelineSensitiveChanges(existing, updated)) {
+            log.info("配置 {} 已生效字段发生变化，重启 CDC 管道使新配置生效", id);
+            pipelineManager.restartPipeline(id);
+        }
+
+        return ResponseEntity.ok(configMapper.toResponse(updated));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteConfig(@PathVariable Long id) {
+        configService.getConfigById(id)
+                .orElseThrow(() -> new EntityNotFoundException("配置不存在: " + id));
+
         try {
-            // 停止管道
             pipelineManager.stopPipeline(id);
         } catch (Exception e) {
             log.warn("停止管道失败: {}", e.getMessage());
@@ -129,21 +103,31 @@ public class DataSourceConfigController {
 
     @PostMapping("/{id}/toggle")
     public ResponseEntity<DataSourceConfigResponse> toggleActive(@PathVariable Long id) {
-        try {
-            DataSourceConfig config = configService.toggleActive(id);
+        DataSourceConfig config = configService.toggleActive(id);
 
-            // 根据新状态启动或停止管道
-            if (config.getIsActive()) {
-                log.info("启用配置，启动 CDC 管道: {}", id);
-                pipelineManager.startPipeline(config);
-            } else {
-                log.info("停用配置，停止 CDC 管道: {}", id);
-                pipelineManager.stopPipeline(id);
-            }
-
-            return ResponseEntity.ok(toResponse.apply(config));
-        } catch (RuntimeException e) {
-            return ResponseEntity.notFound().build();
+        if (config.getIsActive()) {
+            log.info("启用配置并启动 CDC 管道: {}", id);
+            pipelineManager.startPipeline(config);
+        } else {
+            log.info("停用配置并停止 CDC 管道: {}", id);
+            pipelineManager.stopPipeline(id);
         }
+
+        return ResponseEntity.ok(configMapper.toResponse(config));
+    }
+
+    private boolean hasPipelineSensitiveChanges(DataSourceConfig oldConfig, DataSourceConfig newConfig) {
+        return !Objects.equals(oldConfig.getDbHostname(), newConfig.getDbHostname())
+                || !Objects.equals(oldConfig.getDbPort(), newConfig.getDbPort())
+                || !Objects.equals(oldConfig.getDbName(), newConfig.getDbName())
+                || !Objects.equals(oldConfig.getDbUser(), newConfig.getDbUser())
+                || !Objects.equals(oldConfig.getDbPassword(), newConfig.getDbPassword())
+                || !Objects.equals(oldConfig.getSchemaName(), newConfig.getSchemaName())
+                || !Objects.equals(oldConfig.getTableName(), newConfig.getTableName())
+                || !Objects.equals(oldConfig.getRocketmqTopic(), newConfig.getRocketmqTopic())
+                || !Objects.equals(oldConfig.getRocketmqTag(), newConfig.getRocketmqTag())
+                || !Objects.equals(oldConfig.getRocketmqNamesrvAddr(), newConfig.getRocketmqNamesrvAddr())
+                || !Objects.equals(oldConfig.getRocketmqProducerGroup(), newConfig.getRocketmqProducerGroup())
+                || !Objects.equals(oldConfig.getOffsetKey(), newConfig.getOffsetKey());
     }
 }

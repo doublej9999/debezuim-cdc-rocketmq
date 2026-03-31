@@ -7,9 +7,11 @@ import com.example.cdc.repository.DataSourceConfigRepository;
 import com.example.cdc.repository.EventLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,14 +32,20 @@ public class EventLogService {
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 200;
 
+    @Value("${event.cleanup.days:30}")
+    private int cleanupDays;
+
     @Transactional
-    public EventLog createEventLog(Long configId, String topic, String tag, String key, String body) {
+    public EventLog createEventLog(Long configId, String topic, String tag, String key, String body,
+                                   String namesrvAddr, String producerGroup) {
         EventLog eventLog = EventLog.builder()
             .configId(configId)
             .topic(topic)
             .tag(tag)
             .messageKey(key)
             .messageBody(body)
+            .namesrvAddr(namesrvAddr)
+            .producerGroup(producerGroup)
             .status(EventLog.EventStatus.PENDING)
             .retryCount(0)
             .maxRetry(3)
@@ -132,6 +140,21 @@ public class EventLogService {
         LocalDateTime cutoffTime = LocalDateTime.now().minusDays(daysToKeep);
         eventLogRepository.deleteByStatusAndCreatedAtBefore(EventLog.EventStatus.SENT, cutoffTime);
         log.info("清理 {} 之前的已发送事件", cutoffTime);
+    }
+
+    /**
+     * 每天凌晨 2 点自动清理已发送的旧事件日志
+     */
+    @Scheduled(cron = "0 0 2 * * ?")
+    @Transactional
+    public void scheduledCleanup() {
+        log.info("开始自动清理 {} 天前的已发送事件...", cleanupDays);
+        try {
+            cleanupOldEvents(cleanupDays);
+            log.info("自动清理完成");
+        } catch (Exception e) {
+            log.error("自动清理失败: {}", e.getMessage(), e);
+        }
     }
 
     private EventLogDTO convertToDTO(EventLog eventLog, Map<Long, String> configNameMap) {

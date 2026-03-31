@@ -16,7 +16,8 @@ import java.time.LocalDateTime;
 @Table(name = "event_log", indexes = {
     @Index(name = "idx_config_id", columnList = "config_id"),
     @Index(name = "idx_status", columnList = "status"),
-    @Index(name = "idx_created_at", columnList = "created_at")
+    @Index(name = "idx_created_at", columnList = "created_at"),
+    @Index(name = "idx_status_retry_created", columnList = "status, retry_count, created_at")
 })
 @Data
 @Builder
@@ -84,6 +85,18 @@ public class EventLog {
      */
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
+
+    /**
+     * RocketMQ NameServer 地址（用于重试时恢复正确的目标）
+     */
+    @Column(name = "namesrv_addr", length = 255)
+    private String namesrvAddr;
+
+    /**
+     * RocketMQ Producer Group（用于重试时恢复正确的生产者组）
+     */
+    @Column(name = "producer_group", length = 255)
+    private String producerGroup;
 
     /**
      * 创建时间
