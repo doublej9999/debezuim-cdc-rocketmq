@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Debezium CDC 澶氱閬撶鐞嗗钩鍙?/title>
+    <title>Debezium CDC 多管道管理平台</title>
     <style>
         * {
             margin: 0;
@@ -357,123 +357,124 @@
 </head>
 <body>
 <div class="container">
-    <!-- 澶撮儴 -->
+    <!-- 头部 -->
     <header>
-        <h1>馃殌 Debezium CDC 澶氱閬撶鐞嗗钩鍙?/h1>
+        <h1>🚀 Debezium CDC 多管道管理平台</h1>
         <div class="header-info">
             <div class="info-item">
-                <span>娲昏穬绠￠亾鏁?</span>
+                <span>活跃管道数:</span>
                 <span id="activePipelineCount" style="font-weight: bold;">-</span>
             </div>
             <div class="info-item">
-                <span>鎬讳簨浠舵暟:</span>
+                <span>总事件数:</span>
                 <span id="totalEvents" style="font-weight: bold;">-</span>
             </div>
             <div class="info-item">
-                <button class="btn-primary" onclick="refreshAllStatus()">馃攧 鍒锋柊鎵€鏈夌姸鎬?/button>
+                <button class="btn-primary" onclick="refreshAllStatus()">🔧 刷新所有状态</button>
             </div>
         </div>
     </header>
 
-    <!-- 鏍囩椤?-->
+    <!-- 标签页 -->
     <div class="tabs">
-        <button class="tab-button active" data-tab="pipelines" onclick="switchTab('pipelines', this)">馃搳 CDC 绠￠亾鐩戞帶</button>
-        <button class="tab-button" data-tab="configs" onclick="switchTab('configs', this)">鈿欙笍 閰嶇疆绠＄悊</button>
-        <button class="tab-button" data-tab="eventlogs" onclick="switchTab('eventlogs', this)">馃搵 浜嬩欢鏃ュ織</button>
+        <button class="tab-button active" data-tab="pipelines" onclick="switchTab('pipelines', this)">📊 CDC 管道监控</button>
+        <button class="tab-button" data-tab="configs" onclick="switchTab('configs', this)">⚙️ 配置管理</button>
+        <button class="tab-button" data-tab="eventlogs" onclick="switchTab('eventlogs', this)">📋 事件日志</button>
+        <button class="tab-button" data-tab="lifecycle" onclick="switchTab('lifecycle', this)">🛡️ 复制槽治理</button>
     </div>
 
-    <!-- CDC 绠￠亾鐩戞帶鏍囩椤?-->
+    <!-- CDC 管道监控标签页 -->
     <div id="pipelines" class="tab-content active">
         <div class="card">
-            <h2>馃搳 瀹炴椂 CDC 绠￠亾鐘舵€?/h2>
+            <h2>📊 实时 CDC 管道状态</h2>
             <div id="pipelineAlert"></div>
 
             <div class="stats-grid">
                 <div class="stat-item">
-                    <div class="stat-label">娲昏穬绠￠亾</div>
+                    <div class="stat-label">活跃管道</div>
                     <div class="stat-value" id="statActivePipelines">0</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">鎬讳簨浠舵暟</div>
+                    <div class="stat-label">总事件数</div>
                     <div class="stat-value" id="statTotalEvents">0</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">鏈€鍚庢洿鏂?/div>
+                    <div class="stat-label">最后更新</div>
                     <div class="stat-value" id="statLastUpdate" style="font-size: 14px;">-</div>
                 </div>
             </div>
 
             <div id="pipelineContainer" class="pipeline-grid">
-                <div class="empty-state">鏆傛棤 CDC 绠￠亾锛岃娣诲姞閰嶇疆骞跺惎鐢?/div>
+                <div class="empty-state">暂无 CDC 管道，请添加配置并启用</div>
             </div>
         </div>
 
-        <!-- 寮傛鍙戦€佺粺璁￠潰鏉?-->
+        <!-- 异步发送统计面板 -->
         <div class="card">
-            <h2>馃摛 寮傛浜嬩欢鍙戦€佺粺璁?/h2>
+            <h2>📤 异步事件发送统计</h2>
             <div class="stats-grid">
                 <div class="stat-item">
-                    <div class="stat-label">鎬诲叆闃熶簨浠?/div>
+                    <div class="stat-label">总入队事件</div>
                     <div class="stat-value" id="statTotalEnqueued">0</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">鎴愬姛鍙戦€?/div>
+                    <div class="stat-label">成功发送</div>
                     <div class="stat-value" id="statTotalSent" style="color: #28a745;">0</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">鍙戦€佸け璐?/div>
+                    <div class="stat-label">发送失败</div>
                     <div class="stat-value" id="statTotalFailed" style="color: #dc3545;">0</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">闃熷垪涓緟鍙戦€?/div>
+                    <div class="stat-label">队列中待发送</div>
                     <div class="stat-value" id="statQueuedSize" style="color: #ffc107;">0</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">鏈嶅姟鐘舵€?/div>
+                    <div class="stat-label">服务状态</div>
                     <div class="stat-value" id="statAsyncRunning" style="font-size: 14px;">-</div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 閰嶇疆绠＄悊鏍囩椤?-->
+    <!-- 配置管理标签页 -->
     <div id="configs" class="tab-content">
         <div class="card">
-            <h2>馃摑 鏂板鏁版嵁婧愰厤缃?/h2>
+            <h2>📝 新增数据源配置</h2>
             <div id="formAlert"></div>
             <form id="configForm">
                 <input type="hidden" id="editConfigId">
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
                     <div>
-                        <label>閰嶇疆鍚嶇О *</label>
-                        <input type="text" id="configName" placeholder="渚嬪: 鐢熶骇搴撶敤鎴疯〃" required>
+                        <label>配置名称 *</label>
+                        <input type="text" id="configName" placeholder="例如: 生产库用户表" required>
                     </div>
                     <div>
-                        <label>鏁版嵁搴撲富鏈?*</label>
+                        <label>数据库主机 *</label>
                         <input type="text" id="dbHostname" placeholder="localhost" required>
                     </div>
                     <div>
-                        <label>鏁版嵁搴撶鍙?*</label>
+                        <label>数据库端口 *</label>
                         <input type="number" id="dbPort" placeholder="5432" value="5432" required>
                     </div>
                     <div>
-                        <label>鏁版嵁搴撳悕 *</label>
+                        <label>数据库名 *</label>
                         <input type="text" id="dbName" placeholder="postgres" required>
                     </div>
                     <div>
-                        <label>鏁版嵁搴撶敤鎴?*</label>
+                        <label>数据库用户 *</label>
                         <input type="text" id="dbUser" placeholder="postgres" required>
                     </div>
                     <div>
-                        <label>鏁版嵁搴撳瘑鐮?*</label>
-                        <input type="password" id="dbPassword" placeholder="杈撳叆瀵嗙爜" required>
+                        <label>数据库密码 *</label>
+                        <input type="password" id="dbPassword" placeholder="输入密码" required>
                     </div>
                     <div>
-                        <label>Schema 鍚嶇О *</label>
+                        <label>Schema 名称 *</label>
                         <input type="text" id="schemaName" placeholder="public" required>
                     </div>
                     <div>
-                        <label>琛ㄥ悕 *</label>
+                        <label>表名 *</label>
                         <input type="text" id="tableName" placeholder="users" required>
                     </div>
                     <div>
@@ -482,7 +483,7 @@
                     </div>
                     <div>
                         <label>RocketMQ Tag</label>
-                        <input type="text" id="rocketmqTag" placeholder="鍙€夛紝濡? users">
+                        <input type="text" id="rocketmqTag" placeholder="可选，如: users">
                     </div>
                     <div>
                         <label>RocketMQ NameServer</label>
@@ -502,23 +503,23 @@
         </div>
 
         <div class="card">
-            <h2>馃搵 宸蹭繚瀛樼殑閰嶇疆</h2>
+            <h2>📋 已保存的配置</h2>
             <div id="listAlert"></div>
             <div class="table-container">
                 <table id="configTable">
                     <thead>
                     <tr>
-                        <th>閰嶇疆鍚嶇О</th>
-                        <th>鏁版嵁搴?/th>
-                        <th>Schema.琛?/th>
+                        <th>配置名称</th>
+                        <th>数据库</th>
+                        <th>Schema.表</th>
                         <th>Topic / Tag</th>
-                        <th>鐘舵€?/th>
-                        <th>鎿嶄綔</th>
+                        <th>状态</th>
+                        <th>操作</th>
                     </tr>
                     </thead>
                     <tbody id="configTableBody">
                     <tr>
-                        <td colspan="6" class="empty-state">鏆傛棤閰嶇疆锛岃娣诲姞鏂伴厤缃?/td>
+                        <td colspan="6" class="empty-state">暂无配置，请添加新配置</td>
                     </tr>
                     </tbody>
                 </table>
@@ -526,26 +527,26 @@
         </div>
     </div>
 
-    <!-- 浜嬩欢鏃ュ織鏍囩椤?-->
+    <!-- 事件日志标签页 -->
     <div id="eventlogs" class="tab-content">
         <div class="card">
-            <h2>馃搳 浜嬩欢缁熻</h2>
+            <h2>📊 事件统计</h2>
             <div id="eventStatsContainer"
                  style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
                 <div class="stat-card">
-                    <div class="stat-label">寰呭彂閫?/div>
+                    <div class="stat-label">待发送</div>
                     <div class="stat-value" id="statPending">0</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">宸插彂閫?/div>
+                    <div class="stat-label">已发送</div>
                     <div class="stat-value" id="statSent" style="color: #28a745;">0</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">澶辫触</div>
+                    <div class="stat-label">失败</div>
                     <div class="stat-value" id="statFailed" style="color: #dc3545;">0</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">閲嶈瘯涓?/div>
+                    <div class="stat-label">重试中</div>
                     <div class="stat-value" id="statRetry" style="color: #ffc107;">0</div>
                 </div>
             </div>
@@ -553,26 +554,26 @@
 
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h2 style="margin: 0;">馃搵 浜嬩欢鏃ュ織鍒楄〃</h2>
+                <h2 style="margin: 0;">📋 事件日志列表</h2>
                 <div style="display: flex; gap: 10px; align-items: center;">
-                    <input type="text" id="searchKeyword" placeholder="鎼滅储 Topic/Tag/閰嶇疆鍚嶇О"
+                    <input type="text" id="searchKeyword" placeholder="搜索 Topic/Tag/配置名称"
                            style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 200px; height: 50px; ">
                     <select id="statusFilter"
                             style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; height: 50px;">
-                        <option value="">鍏ㄩ儴鐘舵€?/option>
-                        <option value="PENDING">寰呭彂閫?/option>
-                        <option value="SENT">宸插彂閫?/option>
-                        <option value="FAILED">澶辫触</option>
-                        <option value="RETRY">閲嶈瘯涓?/option>
+                        <option value="">全部状态</option>
+                        <option value="PENDING">待发送</option>
+                        <option value="SENT">已发送</option>
+                        <option value="FAILED">失败</option>
+                        <option value="RETRY">重试中</option>
                     </select>
                     <button class="btn-primary btn-small"
                             style="width: auto; min-width: 60px; padding: 0 16px; white-space: nowrap;height: 50px;font-weight: bold;"
-                            onclick="refreshEventLogs()">鍒锋柊
+                            onclick="refreshEventLogs()">刷新
                     </button>
 
                     <button class="btn-warning btn-small"
                             style="width: auto; min-width: 80px; padding: 0 16px; white-space: nowrap;height: 50px;font-weight: bold;"
-                            onclick="retryFailedEvents()">鎵嬪姩閲嶈瘯
+                            onclick="retryFailedEvents()">手动重试
                     </button>
                 </div>
             </div>
@@ -582,27 +583,92 @@
                     <thead>
                     <tr>
                         <th>ID</th>
-                        <th>閰嶇疆鍚嶇О</th>
+                        <th>配置名称</th>
                         <th>Topic</th>
                         <th>Tag</th>
-                        <th>娑堟伅Key</th>
-                        <th>鐘舵€?/th>
-                        <th>閲嶈瘯娆℃暟</th>
-                        <th>鍒涘缓鏃堕棿</th>
-                        <th>閿欒淇℃伅</th>
+                        <th>消息Key</th>
+                        <th>状态</th>
+                        <th>重试次数</th>
+                        <th>创建时间</th>
+                        <th>错误信息</th>
                     </tr>
                     </thead>
                     <tbody id="eventLogTableBody">
                     <tr>
-                        <td colspan="9" class="empty-state">鍔犺浇涓?..</td>
+                        <td colspan="9" class="empty-state">加载中...</td>
                     </tr>
                     </tbody>
                 </table>
             </div>
             <div style="display: flex; justify-content: center; gap: 10px; margin-top: 15px;">
-                <button class="btn-secondary btn-small" onclick="previousPage()" id="prevBtn">涓婁竴椤?/button>
-                <span id="pageInfo" style="padding: 8px;">绗?1 椤?/span>
-                <button class="btn-secondary btn-small" onclick="nextPage()" id="nextBtn">涓嬩竴椤?/button>
+                <button class="btn-secondary btn-small" onclick="previousPage()" id="prevBtn">上一页</button>
+                <span id="pageInfo" style="padding: 8px;">第 1 页</span>
+                <button class="btn-secondary btn-small" onclick="nextPage()" id="nextBtn">下一页</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 复制槽治理标签页 -->
+    <div id="lifecycle" class="tab-content">
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h2>🛡️ 复制槽 (Slot) 与发布 (Publication) 治理</h2>
+                <button class="btn-primary" onclick="loadLifecycleStatus()">🔄 刷新扫描</button>
+            </div>
+            <div id="lifecycleAlert"></div>
+            
+            <div class="stats-grid">
+                <div class="stat-item" style="border-left-color: #dc3545;">
+                    <div class="stat-label">孤立 Slot</div>
+                    <div class="stat-value" id="statOrphanSlots">0</div>
+                </div>
+                <div class="stat-item" style="border-left-color: #ffc107;">
+                    <div class="stat-label">孤立发布</div>
+                    <div class="stat-value" id="statOrphanPubs">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">资源告警配置</div>
+                    <div class="stat-value" id="statAlertConfigs">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🚨 孤立资源 (Orphan Resources)</h2>
+            <p style="font-size: 12px; color: #666; margin-bottom: 10px;">这些资源不属于任何当前系统配置，可能导致主库 WAL 堆积。建议手动清理。</p>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>资源名称</th>
+                            <th>所在数据库</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orphanResourcesTableBody">
+                        <tr><td colspan="3" class="empty-state">未发现孤立资源</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📋 配置资源状态与治理</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>配置名称</th>
+                            <th>状态</th>
+                            <th>复制槽名</th>
+                            <th>WAL 留存 (MB)</th>
+                            <th>治理建议</th>
+                        </tr>
+                    </thead>
+                    <tbody id="configResourcesTableBody">
+                        <tr><td colspan="5" class="empty-state">暂无数据</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -794,7 +860,7 @@
             let totalEvents = 0;
 
             if (Object.keys(pipelines).length === 0) {
-                container.innerHTML = '<div class="empty-state">鏆傛棤娲昏穬 CDC 绠￠亾</div>';
+                container.innerHTML = '<div class="empty-state">暂无活跃 CDC 管道</div>';
                 document.getElementById('statActivePipelines').textContent = '0';
                 document.getElementById('statTotalEvents').textContent = '0';
             } else {
@@ -805,19 +871,19 @@
                                 <div class="pipeline-header">
                                     <div class="pipeline-name">${pipeline.configName}</div>
                                     <div class="pipeline-status ${pipeline.running ? 'running' : 'stopped'}">
-                                        ${pipeline.running ? '鉁?杩愯涓? : '鈼?宸插仠姝?}
+                                        ${pipeline.running ? '✅ 运行中' : '⭕ 已停止'}
                                     </div>
                                 </div>
                                 <div class="pipeline-info">
-                                    <div><span class="pipeline-info-label">鏁版嵁搴?</span> ${pipeline.dbHostname}</div>
-                                    <div><span class="pipeline-info-label">琛?</span> ${pipeline.schemaName}.${pipeline.tableName}</div>
+                                    <div><span class="pipeline-info-label">数据库:</span> ${pipeline.dbHostname}</div>
+                                    <div><span class="pipeline-info-label">表:</span> ${pipeline.schemaName}.${pipeline.tableName}</div>
                                     <div><span class="pipeline-info-label">Topic:</span> ${pipeline.rocketmqTopic}</div>
-                                    <div><span class="pipeline-info-label">浜嬩欢鏁?</span> ${pipeline.processedEvents}</div>
+                                    <div><span class="pipeline-info-label">事件数:</span> ${pipeline.processedEvents}</div>
                                     <div><span class="pipeline-info-label">LSN:</span> ${pipeline.currentLsn}</div>
                                 </div>
                                 <div class="pipeline-actions">
-                                    <button class="btn-success btn-small" onclick="restartPipeline(${pipeline.configId})">馃攧 閲嶅惎</button>
-                                    <button class="btn-danger btn-small" onclick="stopPipeline(${pipeline.configId})">鈴?鍋滄</button>
+                                    <button class="btn-success btn-small" onclick="restartPipeline(${pipeline.configId})">🔧 重启</button>
+                                    <button class="btn-danger btn-small" onclick="stopPipeline(${pipeline.configId})">🔔 停止</button>
                                 </div>
                             </div>
                         `;
@@ -832,14 +898,16 @@
             document.getElementById('totalEvents').textContent = totalEvents;
             document.getElementById('statLastUpdate').textContent = new Date().toLocaleTimeString('zh-CN');
 
-            // 鍒锋柊寮傛鍙戦€佺粺璁?            await refreshAsyncStats();
+            // 刷新异步发送统计
+            await refreshAsyncStats();
 
         } catch (error) {
-            console.error('鍒锋柊绠￠亾鐘舵€佸け璐?', error);
+            console.error('刷新管道状态失败', error);
         }
     }
 
-    // 鍒锋柊寮傛鍙戦€佺粺璁?    async function refreshAsyncStats() {
+    // 刷新异步发送统计
+    async function refreshAsyncStats() {
         try {
             const response = await fetch(`${PIPELINE_API}/async-stats`);
             const stats = await response.json();
@@ -848,14 +916,14 @@
             document.getElementById('statTotalSent').textContent = stats.totalSent;
             document.getElementById('statTotalFailed').textContent = stats.totalFailed;
             document.getElementById('statQueuedSize').textContent = stats.queuedSize;
-            document.getElementById('statAsyncRunning').textContent = stats.running ? '鉁?杩愯涓? : '鈼?宸插仠姝?;
+            document.getElementById('statAsyncRunning').textContent = stats.running ? '✅ 运行中' : '⭕ 已停止';
 
         } catch (error) {
-            console.error('鍒锋柊寮傛缁熻澶辫触:', error);
+            console.error('刷新异步统计失败:', error);
         }
     }
 
-    // 鍋滄 CDC 绠￠亾
+    // 停止 CDC 管道
     async function stopPipeline(configId) {
         try {
             const response = await fetch(`${PIPELINE_API}/${configId}/stop`, {
@@ -863,17 +931,17 @@
             });
 
             if (response.ok) {
-                showAlert('pipelineAlert', '鉁?CDC 绠￠亾宸插仠姝?, 'success');
+                showAlert('pipelineAlert', '✅ CDC 管道已停止', 'success');
                 setTimeout(refreshAllStatus, 500);
             } else {
-                showAlert('pipelineAlert', '鉂?鍋滄澶辫触', 'error');
+                showAlert('pipelineAlert', '❌ 停止失败', 'error');
             }
         } catch (error) {
-            showAlert('pipelineAlert', '鉂?缃戠粶閿欒: ' + error.message, 'error');
+            showAlert('pipelineAlert', '❌ 网络错误: ' + error.message, 'error');
         }
     }
 
-    // 閲嶅惎 CDC 绠￠亾
+    // 重启 CDC 管道
     async function restartPipeline(configId) {
         try {
             const response = await fetch(`${PIPELINE_API}/${configId}/restart`, {
@@ -881,36 +949,39 @@
             });
 
             if (response.ok) {
-                showAlert('pipelineAlert', '鉁?CDC 绠￠亾宸查噸鍚?, 'success');
+                showAlert('pipelineAlert', '✅ CDC 管道已重启', 'success');
                 setTimeout(refreshAllStatus, 500);
             } else {
-                showAlert('pipelineAlert', '鉂?閲嶅惎澶辫触', 'error');
+                showAlert('pipelineAlert', '❌ 重启失败', 'error');
             }
         } catch (error) {
-            showAlert('pipelineAlert', '鉂?缃戠粶閿欒: ' + error.message, 'error');
+            showAlert('pipelineAlert', '❌ 网络错误: ' + error.message, 'error');
         }
     }
 
-    // 鍒囨崲鏍囩椤?    function switchTab(tabName, tabButton) {
-        // 闅愯棌鎵€鏈夋爣绛鹃〉
+    // 切换标签页
+    function switchTab(tabName, tabButton) {
+        // 隐藏所有标签页
         document.querySelectorAll('.tab-content').forEach(tab => {
             tab.classList.remove('active');
         });
 
-        // 绉婚櫎鎵€鏈夋寜閽殑娲昏穬鐘舵€?        document.querySelectorAll('.tab-button').forEach(btn => {
+        // 移除所有按钮的活跃状态
+        document.querySelectorAll('.tab-button').forEach(btn => {
             btn.classList.remove('active');
         });
 
-        // 鏄剧ず閫変腑鐨勬爣绛鹃〉
+        // 显示选中的标签页
         document.getElementById(tabName).classList.add('active');
 
-        // 鏍囪閫変腑鐨勬寜閽?        const targetButton = tabButton || document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+        // 标记选中的按钮
+        const targetButton = tabButton || document.querySelector(`.tab-button[data-tab="${tabName}"]`);
         if (targetButton) {
             targetButton.classList.add('active');
         }
     }
 
-    // 鏄剧ず鎻愮ず淇℃伅
+    // 显示提示信息
     function showAlert(elementId, message, type) {
         const alert = document.getElementById(elementId);
         alert.textContent = message;
@@ -920,12 +991,12 @@
         }, 5000);
     }
 
-    // ========== 浜嬩欢鏃ュ織鐩稿叧鍑芥暟 ==========
+    // ========== 事件日志相关函数 ==========
     const EVENT_LOG_API = '/api/event-log';
     let currentPage = 0;
     let currentStatus = '';
 
-    // 鍒囨崲鏍囩椤垫椂鍔犺浇浜嬩欢鏃ュ織
+    // 切换标签页时加载事件日志
     const originalSwitchTab = switchTab;
     switchTab = function (tabName, tabButton) {
         originalSwitchTab.call(this, tabName, tabButton);
@@ -935,7 +1006,7 @@
         }
     };
 
-    // 鍒锋柊浜嬩欢缁熻
+    // 刷新事件统计
     async function refreshEventStats() {
         try {
             const response = await fetch(`${EVENT_LOG_API}/statistics`);
@@ -947,11 +1018,11 @@
                 document.getElementById('statRetry').textContent = stats.RETRY || 0;
             }
         } catch (error) {
-            console.error('鑾峰彇浜嬩欢缁熻澶辫触:', error);
+            console.error('获取事件统计失败:', error);
         }
     }
 
-    // 鍒锋柊浜嬩欢鏃ュ織鍒楄〃
+    // 刷新事件日志列表
     async function refreshEventLogs() {
         try {
             const keyword = document.getElementById('searchKeyword').value.trim();
@@ -959,7 +1030,7 @@
 
             let url;
             if (keyword || status) {
-                // 浣跨敤鎼滅储 API
+                // 使用搜索 API
                 const params = new URLSearchParams();
                 params.append('page', currentPage);
                 params.append('size', 20);
@@ -967,7 +1038,7 @@
                 if (status) params.append('status', status);
                 url = `${EVENT_LOG_API}/search?${params.toString()}`;
             } else {
-                // 浣跨敤榛樿鏌ヨ API
+                // 使用默认查询 API
                 url = `${EVENT_LOG_API}?page=${currentPage}&size=20`;
             }
 
@@ -976,19 +1047,19 @@
                 const data = await response.json();
                 renderEventLogs(data);
             } else {
-                showAlert('eventLogAlert', '鉂?鍔犺浇浜嬩欢鏃ュ織澶辫触', 'error');
+                showAlert('eventLogAlert', '❌ 加载事件日志失败', 'error');
             }
         } catch (error) {
-            showAlert('eventLogAlert', '鉂?缃戠粶閿欒: ' + error.message, 'error');
+            showAlert('eventLogAlert', '❌ 网络错误: ' + error.message, 'error');
         }
     }
 
-    // 娓叉煋浜嬩欢鏃ュ織琛ㄦ牸
+    // 渲染事件日志表格
     function renderEventLogs(data) {
         const tbody = document.getElementById('eventLogTableBody');
 
         if (!data.content || data.content.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">鏆傛棤浜嬩欢鏃ュ織</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无事件日志</td></tr>';
             return;
         }
 
@@ -1025,13 +1096,14 @@
 
         tbody.innerHTML = rows;
 
-        // 鏇存柊鍒嗛〉淇℃伅
-        document.getElementById('pageInfo').textContent = `绗?${data.number + 1} 椤?/ 鍏?${data.totalPages} 椤礰;
+        // 更新分页信息
+        document.getElementById('pageInfo').textContent = `第 ${data.number + 1} 页 / 共 ${data.totalPages} 页`;
         document.getElementById('prevBtn').disabled = data.first;
         document.getElementById('nextBtn').disabled = data.last;
     }
 
-    // 鏍煎紡鍖栨棩鏈熸椂闂?    function formatDateTime(dateTimeStr) {
+    // 格式化日期时间
+    function formatDateTime(dateTimeStr) {
         if (!dateTimeStr) return '-';
         const date = new Date(dateTimeStr);
         return date.toLocaleString('zh-CN', {
@@ -1044,38 +1116,40 @@
         });
     }
 
-    // 涓婁竴椤?    function previousPage() {
+    // 上一页
+    function previousPage() {
         if (currentPage > 0) {
             currentPage--;
             refreshEventLogs();
         }
     }
 
-    // 涓嬩竴椤?    function nextPage() {
+    // 下一页
+    function nextPage() {
         currentPage++;
         refreshEventLogs();
     }
 
-    // 鎵嬪姩瑙﹀彂閲嶈瘯
+    // 手动触发重试
     async function retryFailedEvents() {
         try {
             const response = await fetch(`${EVENT_LOG_API}/retry`, {method: 'POST'});
             if (response.ok) {
                 const message = await response.text();
-                showAlert('eventLogAlert', '鉁?' + message, 'success');
+                showAlert('eventLogAlert', '✅ ' + message, 'success');
                 setTimeout(() => {
                     refreshEventLogs();
                     refreshEventStats();
                 }, 1000);
             } else {
-                showAlert('eventLogAlert', '鉂?閲嶈瘯澶辫触', 'error');
+                showAlert('eventLogAlert', '❌ 重试失败', 'error');
             }
         } catch (error) {
-            showAlert('eventLogAlert', '鉂?缃戠粶閿欒: ' + error.message, 'error');
+            showAlert('eventLogAlert', '❌ 网络错误: ' + error.message, 'error');
         }
     }
 
-    // 缁戝畾浜嬩欢鏃ュ織绛涢€変笌鎼滅储浜嬩欢
+    // 绑定事件日志筛选与搜索事件
     function bindEventLogFilters() {
         const statusFilter = document.getElementById('statusFilter');
         const searchKeyword = document.getElementById('searchKeyword');
@@ -1088,7 +1162,8 @@
         }
 
         if (searchKeyword) {
-            // 鍥炶溅閿悳绱?            searchKeyword.addEventListener('keypress', (e) => {
+            // 回车键搜索
+            searchKeyword.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     currentPage = 0;
                     refreshEventLogs();
@@ -1096,9 +1171,121 @@
             });
         }
     }
+    // 切换标签页时加载复制槽治理
+    const prevSwitchTab = switchTab;
+    switchTab = function (tabName, tabButton) {
+        prevSwitchTab.call(this, tabName, tabButton);
+        if (tabName === 'lifecycle') {
+            loadLifecycleStatus();
+        }
+    };
+
+    // ========== 复制槽治理相关函数 ==========
+    const LIFECYCLE_API = '/api/lifecycle';
+
+    async function loadLifecycleStatus() {
+        try {
+            const response = await fetch(`${LIFECYCLE_API}/status`);
+            if (response.ok) {
+                const status = await response.json();
+                renderLifecycleStatus(status);
+            } else {
+                showAlert('lifecycleAlert', '❌ 加载治理状态失败', 'error');
+            }
+        } catch (error) {
+            showAlert('lifecycleAlert', '❌ 网络错误: ' + error.message, 'error');
+        }
+    }
+
+    function renderLifecycleStatus(status) {
+        // 更新统计数据
+        document.getElementById('statOrphanSlots').textContent = status.orphanSlots.length || 0;
+        document.getElementById('statOrphanPubs').textContent = status.orphanPublications.length || 0;
+        document.getElementById('statAlertConfigs').textContent = status.configResources.filter(c => c.alertLevel !== 'NORMAL').length;
+
+        // 渲染孤立资源
+        const orphanTbody = document.getElementById('orphanResourcesTableBody');
+        const orphans = [];
+        
+        status.orphanSlots.forEach(slot => {
+           orphans.push({ type: 'Slot', name: slot.name, dbUrl: slot.dbUrl, resource: slot });
+        });
+        status.orphanPublications.forEach(pub => {
+           orphans.push({ type: 'Publication', name: pub.name, dbUrl: pub.dbUrl, resource: pub });
+        });
+
+        if (orphans.length === 0) {
+            orphanTbody.innerHTML = '<tr><td colspan="3" class="empty-state">未发现孤立资源</td></tr>';
+        } else {
+            orphanTbody.innerHTML = orphans.map(item => `
+                <tr>
+                    <td><span class="status-badge" style="background:#dee2e6; color:#333; font-weight:normal;">${item.type}</span> ${item.name}</td>
+                    <td>${item.dbUrl}</td>
+                    <td>
+                        <button class="btn-danger btn-small" style="padding: 2px 8px;" onclick="cleanupOrphan('${item.type}', ${JSON.stringify(item.resource).replace(/"/g, '&quot;')})">🗑 清理</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // 渲染配置资源
+        const configTbody = document.getElementById('configResourcesTableBody');
+        if (!status.configResources || status.configResources.length === 0) {
+            configTbody.innerHTML = '<tr><td colspan="5" class="empty-state">暂无配置数据</td></tr>';
+        } else {
+            configTbody.innerHTML = status.configResources.map(res => {
+                const walMb = res.retainedWalBytes ? (res.retainedWalBytes / 1024 / 1024).toFixed(2) : '0.00';
+                let suggestion = '🟢 正常运行';
+                let levelStyle = '';
+                
+                if (res.alertLevel === 'ERROR') {
+                    levelStyle = 'background:#fff5f5; border-left: 4px solid #dc3545;';
+                    if (!res.isActive) suggestion = `<b style="color:#dc3545;">🚫 停用超期(${res.daysInactive}天)</b>，建议清理或重启`;
+                    else suggestion = `<b style="color:#dc3545;">⚠️ WAL堆积严重(${walMb}MB)</b>，请检查消费者！`;
+                } else if (res.alertLevel === 'WARN') {
+                    levelStyle = 'background:#fffdf5; border-left: 4px solid #ffc107;';
+                    if (!res.isActive) suggestion = `<span style="color:#856404;">🕒 停用${res.daysInactive}天</span>，请关注`;
+                    else suggestion = `<span style="color:#856404;">🔔 WAL存在堆积(${walMb}MB)</span>`;
+                }
+
+                return `
+                    <tr style="${levelStyle}">
+                        <td><strong>${res.configName}</strong></td>
+                        <td>
+                            <span class="status-badge ${res.isActive ? 'status-running' : 'status-stopped'}">
+                                ${res.isActive ? '启用' : '停用'}
+                            </span>
+                        </td>
+                        <td>${res.slotName}</td>
+                        <td style="font-family: monospace;">${walMb} MB</td>
+                        <td>${suggestion}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+    }
+
+    async function cleanupOrphan(type, resource) {
+        const action = type === 'Slot' ? 'cleanup/orphan-slot' : 'cleanup/orphan-publication';
+        if (!confirm(`确定要永久删除该孤立 ${type} [${resource.name}] 吗？\n请务必确认此资源不再被任何程序使用。`)) return;
+
+        try {
+            const response = await fetch(`${LIFECYCLE_API}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(resource)
+            });
+
+            if (response.ok) {
+                showAlert('lifecycleAlert', `✅ ${type} 清理成功`, 'success');
+                loadLifecycleStatus();
+            } else {
+                showAlert('lifecycleAlert', `❌ ${type} 清理失败`, 'error');
+            }
+        } catch (error) {
+            showAlert('lifecycleAlert', `❌ 网络错误: ${error.message}`, 'error');
+        }
+    }
 </script>
 </body>
 </html>
-
-
-

@@ -3,6 +3,7 @@ package com.example.cdc.model;
 import com.example.cdc.config.AesEncryptor;
 import jakarta.persistence.*;
 import lombok.Data;
+
 import java.time.LocalDateTime;
 
 @Data
@@ -62,6 +63,9 @@ public class DataSourceConfig {
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "deactivated_at")
+    private LocalDateTime deactivatedAt;
 
     @PrePersist
     protected void onCreate() {

@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +19,7 @@ import java.util.UUID;
 public class DataSourceConfigService {
 
     private final DataSourceConfigRepository repository;
+    private final PgReplicationService pgReplicationService;
 
     public List<DataSourceConfig> getAllConfigs() {
         return repository.findAllByOrderByCreatedAtDesc();
@@ -65,6 +67,9 @@ public class DataSourceConfigService {
     @Transactional
     public void deleteConfig(Long id) {
         log.info("删除数据源配置: {}", id);
+        repository.findById(id).ifPresent(config -> {
+            pgReplicationService.cleanupReplicationResources(config);
+        });
         repository.deleteById(id);
     }
 
@@ -73,6 +78,11 @@ public class DataSourceConfigService {
         return repository.findById(id)
                 .map(config -> {
                     config.setIsActive(!config.getIsActive());
+                    if (!config.getIsActive()) {
+                        config.setDeactivatedAt(LocalDateTime.now());
+                    } else {
+                        config.setDeactivatedAt(null);
+                    }
                     log.info("切换数据源配置状态: {} -> {}", config.getName(), config.getIsActive());
                     return repository.save(config);
                 })
