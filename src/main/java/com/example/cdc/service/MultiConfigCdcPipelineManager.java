@@ -7,10 +7,12 @@ import io.debezium.engine.DebeziumEngine;
 import io.debezium.engine.format.Json;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,6 +32,10 @@ public class MultiConfigCdcPipelineManager {
 
     // 存储每个配置对应的 CDC 管道
     private final Map<Long, CdcPipeline> pipelines = new ConcurrentHashMap<>();
+
+    // 追踪最近重试时间，防止由于永久性错误导致的无限重启循环
+    private final Map<Long, LocalDateTime> lastRestartAttempts = new ConcurrentHashMap<>();
+    private static final Duration RESTART_COOLDOWN = Duration.ofMinutes(5);
 
     // 虚拟线程执行器
     private ExecutorService virtualThreadExecutor;
@@ -157,6 +163,52 @@ public class MultiConfigCdcPipelineManager {
     }
 
     /**
+     * 自动监控与自愈任务 (Watchdog)
+     * 每分钟检查一次所有活跃配置，如果发现管道未运行则尝试重启
+     */
+    @Scheduled(fixedDelayString = "${cdc.watchdog.interval.ms:60000}")
+    public void checkAndRestartPipelines() {
+        log.debug("CDC Watchdog 开始执行巡检...");
+
+        try {
+            List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
+
+            for (DataSourceConfig config : activeConfigs) {
+                Long configId = config.getId();
+                CdcPipeline pipeline = pipelines.get(configId);
+
+                // 情况 1: 应该运行但不在内存映射中
+                // 情况 2: 在内存中但 running 标志位为 false (Debezium 引擎已停止)
+                if (pipeline == null || !pipeline.isRunning()) {
+                    if (isCooldownExpired(configId)) {
+                        log.warn("检测到异常：配置 {} [{}] 应该运行但当前已停止，Watchdog 尝试自动重启...",
+                            configId, config.getName());
+
+                        try {
+                            lastRestartAttempts.put(configId, LocalDateTime.now());
+                            restartPipeline(configId);
+                        } catch (Exception e) {
+                            log.error("Watchdog 尝试重启配置 {} 失败: {}", configId, e.getMessage());
+                        }
+                    } else {
+                        log.debug("配置 {} 处于异常状态，但处于冷却期内，暂不触发自动重启", configId);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("CDC Watchdog 巡检过程中发生错误: {}", e.getMessage());
+        }
+    }
+
+    private boolean isCooldownExpired(Long configId) {
+        LocalDateTime lastAttempt = lastRestartAttempts.get(configId);
+        if (lastAttempt == null) {
+            return true;
+        }
+        return Duration.between(lastAttempt, LocalDateTime.now()).compareTo(RESTART_COOLDOWN) >= 0;
+    }
+
+    /**
      * 获取指定配置的管道状态
      */
     public PipelineStatus getPipelineStatus(Long configId) {
@@ -239,6 +291,10 @@ public class MultiConfigCdcPipelineManager {
         private final AtomicLong processedEventCount = new AtomicLong(0);
         private volatile String currentLsn = "N/A";
         private volatile boolean running = false;
+
+        public boolean isRunning() {
+            return running;
+        }
 
         public CdcPipeline(DataSourceConfig config, ExecutorService executor,
                           RocketMQProducerService rocketMQProducerService,

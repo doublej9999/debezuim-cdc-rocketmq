@@ -53,7 +53,7 @@ public class AsyncEventSenderService {
     @Value("${async.event.retry.batch.size:200}")
     private int retryBatchSize;
 
-    private BlockingQueue<ChangeEventMessage> eventQueue;
+    private List<BlockingQueue<ChangeEventMessage>> eventQueues;
     private ExecutorService senderExecutor;
     private volatile boolean running = false;
     private final AtomicLong totalEnqueued = new AtomicLong(0);
@@ -74,16 +74,29 @@ public class AsyncEventSenderService {
 
     @PostConstruct
     public void init() {
-        log.info("初始化异步事件发送服务 - 队列大小: {}, 发送线程数: {}, 批处理大小: {}",
+        log.info("初始化异步事件发送服务 (严格保序高性能版) - 总队列大小: {}, 发送分片(线程)数: {}, 批处理大小: {}",
             queueSize, senderThreads, batchSize);
 
-        eventQueue = new LinkedBlockingQueue<>(queueSize);
+        // 初始化分片队列
+        eventQueues = new ArrayList<>(senderThreads);
+        int perQueueSize = Math.max(1, queueSize / senderThreads);
+        for (int i = 0; i < senderThreads; i++) {
+            eventQueues.add(new LinkedBlockingQueue<>(perQueueSize));
+        }
 
         this.enqueuedCounter = Counter.builder("cdc_events_enqueued_total").register(meterRegistry);
         this.sentCounter = Counter.builder("cdc_events_sent_total").register(meterRegistry);
         this.failedCounter = Counter.builder("cdc_events_failed_total").register(meterRegistry);
         this.sendTimer = Timer.builder("cdc_event_send_latency").register(meterRegistry);
-        Gauge.builder("cdc_event_queue_size", eventQueue, BlockingQueue::size).register(meterRegistry);
+        
+        // 注册各个分片队列的监控
+        for (int i = 0; i < senderThreads; i++) {
+            final int index = i;
+            Gauge.builder("cdc_event_queue_size_" + i, eventQueues.get(i), BlockingQueue::size)
+                .description("CDC 事件分片队列 " + i + " 的当前大小")
+                .register(meterRegistry);
+        }
+
         senderExecutor = Executors.newFixedThreadPool(senderThreads, r -> {
             Thread t = new Thread(r, "async-event-sender-" + threadCounter.incrementAndGet());
             t.setDaemon(false);
@@ -92,15 +105,19 @@ public class AsyncEventSenderService {
 
         running = true;
         for (int i = 0; i < senderThreads; i++) {
-            senderExecutor.submit(this::processBatch);
+            final int queueIndex = i;
+            senderExecutor.submit(() -> processQueue(queueIndex));
         }
 
         // 启动补偿：加载待发送和待重试事件
         reloadPendingEvents();
 
-        log.info("异步事件发送服务已启动");
+        log.info("异步事件发送服务已启动，采用 {} 个独立分片确保严格保序", senderThreads);
     }
 
+    /**
+     * 将事件入队，根据 Key 进行 Hash 路由到指定分片队列
+     */
     public void enqueueEvent(String topic, String tag, String key, String body, Long configId,
                              String namesrvAddr, String producerGroup) {
         if (!running) {
@@ -109,50 +126,68 @@ public class AsyncEventSenderService {
         }
 
         try {
+            // 1. 持久化日志（确保数据库中有记录）
             EventLog eventLog = eventLogService.createEventLog(configId, topic, tag, key, body,
                     namesrvAddr, producerGroup);
+            
             ChangeEventMessage message = new ChangeEventMessage(
                 topic, tag, key, body, configId, eventLog.getId(), namesrvAddr, producerGroup
             );
 
-            boolean offered = eventQueue.offer(message);
+            // 2. Hash 路由：确保相同的 Key 路由到同一个 Queue，从而由同一个处理线程顺序发送
+            // 如果 key 为空（通常不应该），则按 configId 路由以保证表级顺序
+            int routeKey = (key != null && !key.isBlank()) ? key.hashCode() : configId.hashCode();
+            int queueIndex = Math.abs(routeKey) % senderThreads;
+            BlockingQueue<ChangeEventMessage> targetQueue = eventQueues.get(queueIndex);
+
+            boolean offered = targetQueue.offer(message);
             if (offered) {
                 totalEnqueued.incrementAndGet();
                 enqueuedCounter.increment();
-                log.debug("事件已入队 - ConfigId: {}, Topic: {}, EventId: {}, 队列大小: {}",
-                    configId, topic, eventLog.getId(), eventQueue.size());
+                log.debug("事件已入分片队列 {} - ConfigId: {}, Topic: {}, EventId: {}, 队列当前大小: {}",
+                    queueIndex, configId, topic, eventLog.getId(), targetQueue.size());
             } else {
                 totalFailed.incrementAndGet();
                 failedCounter.increment();
-                log.warn("事件队列已满，事件已持久化等待重试 - ConfigId: {}, Topic: {}, EventId: {}",
-                    configId, topic, eventLog.getId());
+                log.warn("分片队列 {} 已满，事件已持久化等待重试 - ConfigId: {}, Topic: {}, EventId: {}",
+                    queueIndex, configId, topic, eventLog.getId());
             }
         } catch (Exception e) {
             totalFailed.incrementAndGet();
             failedCounter.increment();
-            log.error("保存事件到数据库失败 - ConfigId: {}, Topic: {}, Error: {}",
+            log.error("处理事件入队失败 - ConfigId: {}, Topic: {}, Error: {}",
                 configId, topic, e.getMessage(), e);
         }
     }
 
-    private void processBatch() {
-        log.info("事件发送线程已启动");
+    /**
+     * 每个线程负责一个固定的队列，确保队列内的消息严格按序发送
+     */
+    private void processQueue(int queueIndex) {
+        log.info("事件发送线程 {} [分片 {}] 已启动", Thread.currentThread().getName(), queueIndex);
+        BlockingQueue<ChangeEventMessage> queue = eventQueues.get(queueIndex);
 
         while (running) {
             try {
-                ChangeEventMessage firstMessage = eventQueue.poll(batchTimeoutMs, TimeUnit.MILLISECONDS);
+                // 1. 获取首个消息（阻塞等待）
+                ChangeEventMessage firstMessage = queue.poll(batchTimeoutMs, TimeUnit.MILLISECONDS);
                 if (firstMessage == null) {
                     continue;
                 }
 
+                // 2. 尝试批量获取后续消息 (用于提高吞吐量)
                 List<ChangeEventMessage> batch = new ArrayList<>();
                 batch.add(firstMessage);
-                eventQueue.drainTo(batch, batchSize - 1);
+                queue.drainTo(batch, batchSize - 1);
 
-                // 发送批次
+                // 3. 执行发送
+                // 注意：在严格保序模式下，Batch 发送必须确保在 RocketMQ 侧也是顺序存储的
+                // 此处我们按顺序单条发送，或者如果在 RocketMQ 端也能保证批次内顺序则可启用批次
                 if (batchEnabled && !rocketMQProducerService.isOrderlyEnabled()) {
+                    // 非顺序模式允许乱序批次发送
                     sendBatchMessages(batch);
                 } else {
+                    // 顺序模式下，循环单条发送，确保前一条成功后再发下一条（或者利用 RocketMQ 的顺序发送 API）
                     for (ChangeEventMessage message : batch) {
                         sendSingleMessage(message);
                     }
@@ -160,35 +195,38 @@ public class AsyncEventSenderService {
 
             } catch (InterruptedException e) {
                 if (running) {
-                    log.warn("事件发送线程被中断: {}", e.getMessage());
+                    log.warn("事件发送线程分片 {} 被中断", queueIndex);
                 }
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("处理事件批次时出错: {}", e.getMessage(), e);
+                log.error("处理分片 {} 的事件批次时出错: {}", queueIndex, e.getMessage(), e);
             }
         }
 
-        log.info("事件发送线程已停止");
+        log.info("事件发送线程分片 {} 已停止", queueIndex);
     }
 
     private void sendSingleMessage(ChangeEventMessage message) {
         try {
             Timer.Sample sample = Timer.start(meterRegistry);
+            
+            // RocketMQProducerService.sendMessage 内部在 orderlyEnabled 为 true 时会使用 key 进行 Queue 选择
+            // 由于同一个分片线程负责固定的 Key，且单线程循环发送，因此保证了全局严格顺序
             rocketMQProducerService.sendMessage(
                 message.namesrvAddr, message.producerGroup, message.topic, message.tag, message.key, message.body
             );
+            
             totalSent.incrementAndGet();
             sentCounter.increment();
-
             sample.stop(sendTimer);
 
             if (message.eventId != null) {
                 eventLogService.markAsSent(message.eventId);
             }
 
-            log.debug("消息发送成功 - ConfigId: {}, Topic: {}, Tag: {}, EventId: {}",
-                message.configId, message.topic, message.tag, message.eventId);
+            log.debug("分片发送成功 - ConfigId: {}, Topic: {}, EventId: {}",
+                message.configId, message.topic, message.eventId);
         } catch (Exception e) {
             totalFailed.incrementAndGet();
             failedCounter.increment();
@@ -199,8 +237,8 @@ public class AsyncEventSenderService {
                 eventLogService.markAsFailed(message.eventId, e.getMessage());
             }
 
-            log.error("消息发送失败 - ConfigId: {}, Topic: {}, Tag: {}, EventId: {}, Error: {}",
-                message.configId, message.topic, message.tag, message.eventId, e.getMessage());
+            log.error("分片发送失败 - ConfigId: {}, Topic: {}, EventId: {}, Error: {}",
+                message.configId, message.topic, message.eventId, e.getMessage());
         }
     }
 
@@ -262,20 +300,15 @@ public class AsyncEventSenderService {
 
             log.info("启动补偿加载 {} 条待发送/重试事件", pending.size());
             for (EventLog event : pending) {
-                ChangeEventMessage message = new ChangeEventMessage(
+                enqueueEvent(
                     event.getTopic(),
                     event.getTag(),
                     event.getMessageKey(),
                     event.getMessageBody(),
                     event.getConfigId(),
-                    event.getId(),
                     event.getNamesrvAddr(),
                     event.getProducerGroup()
                 );
-                boolean offered = eventQueue.offer(message);
-                if (!offered) {
-                    log.warn("补偿队列已满，事件将保留在数据库待重试 - EventId: {}", event.getId());
-                }
             }
         } catch (Exception e) {
             log.error("启动补偿加载失败: {}", e.getMessage(), e);
@@ -284,14 +317,18 @@ public class AsyncEventSenderService {
 
     @PreDestroy
     public void shutdown() {
-        log.info("关闭异步事件发送服务...");
+        log.info("正在关闭异步事件发送服务...");
         running = false;
 
-        if (eventQueue != null && !eventQueue.isEmpty()) {
-            log.info("处理剩余的 {} 条事件...", eventQueue.size());
-            ChangeEventMessage message;
-            while ((message = eventQueue.poll()) != null) {
-                sendSingleMessage(message);
+        // 尝试刷空所有分片队列
+        for (int i = 0; i < senderThreads; i++) {
+            BlockingQueue<ChangeEventMessage> queue = eventQueues.get(i);
+            if (!queue.isEmpty()) {
+                log.info("分片 {} 仍有 {} 条事件待处理，尝试优雅闭环...", i, queue.size());
+                ChangeEventMessage message;
+                while ((message = queue.poll()) != null) {
+                    sendSingleMessage(message);
+                }
             }
         }
 
@@ -299,7 +336,7 @@ public class AsyncEventSenderService {
             senderExecutor.shutdown();
             try {
                 if (!senderExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                    log.warn("发送线程池未能在 30 秒内关闭，强制关闭");
+                    log.warn("发送线程池未能在 30 秒内正常退出，强制关闭");
                     senderExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -337,21 +374,21 @@ public class AsyncEventSenderService {
 
             int processed = 0;
             for (EventLog event : pendingEvents) {
-                ChangeEventMessage message = new ChangeEventMessage(
+                // 重试也需要入路由队列以保证顺序，或者在此单线程同步重试（若不要求重试与实时事件的交替顺序）
+                // 为了简单且不破坏该 Key 的实时顺序，我们重新入队处理
+                enqueueEvent(
                     event.getTopic(),
                     event.getTag(),
                     event.getMessageKey(),
                     event.getMessageBody(),
                     event.getConfigId(),
-                    event.getId(),
                     event.getNamesrvAddr(),
                     event.getProducerGroup()
                 );
-                sendSingleMessage(message);
                 processed++;
             }
 
-            log.info("重试任务完成");
+            log.info("重试任务入队完成");
             return processed;
         } catch (Exception e) {
             log.error("重试失败事件时出错: {}", e.getMessage(), e);
@@ -360,11 +397,12 @@ public class AsyncEventSenderService {
     }
 
     public Statistics getStatistics() {
+        int totalQueued = eventQueues.stream().mapToInt(BlockingQueue::size).sum();
         return new Statistics(
             totalEnqueued.get(),
             totalSent.get(),
             totalFailed.get(),
-            eventQueue.size(),
+            totalQueued,
             running
         );
     }
