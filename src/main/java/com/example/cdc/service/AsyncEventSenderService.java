@@ -398,12 +398,18 @@ public class AsyncEventSenderService {
 
     public Statistics getStatistics() {
         int totalQueued = eventQueues.stream().mapToInt(BlockingQueue::size).sum();
+        List<ShardStatistics> shardStats = new ArrayList<>();
+        for (int i = 0; i < eventQueues.size(); i++) {
+            shardStats.add(new ShardStatistics(i, eventQueues.get(i).size()));
+        }
+        
         return new Statistics(
             totalEnqueued.get(),
             totalSent.get(),
             totalFailed.get(),
             totalQueued,
-            running
+            running,
+            shardStats
         );
     }
 
@@ -417,18 +423,6 @@ public class AsyncEventSenderService {
         private final Long eventId;
         private final String namesrvAddr;
         private final String producerGroup;
-
-        public ChangeEventMessage(String topic, String tag, String key, String body,
-                                  Long configId, Long eventId, String namesrvAddr, String producerGroup) {
-            this.topic = topic;
-            this.tag = tag;
-            this.key = key;
-            this.body = body;
-            this.configId = configId;
-            this.eventId = eventId;
-            this.namesrvAddr = namesrvAddr;
-            this.producerGroup = producerGroup;
-        }
     }
 
     @Data
@@ -438,5 +432,12 @@ public class AsyncEventSenderService {
         private final long totalFailed;
         private final int queuedSize;
         private final boolean running;
+        private final List<ShardStatistics> shards;
+    }
+
+    @Data
+    public static class ShardStatistics {
+        private final int id;
+        private final int queueSize;
     }
 }

@@ -345,13 +345,57 @@
             color: #999;
         }
 
-        @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-            100% {
-                transform: rotate(360deg);
-            }
+        .pipeline-info-error {
+            color: #dc3545;
+            background: #fff5f5;
+            padding: 5px;
+            border-radius: 4px;
+            margin-top: 5px;
+            font-size: 11px;
+            word-break: break-all;
+            border-left: 3px solid #dc3545;
+        }
+
+        .shard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .shard-item {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .shard-label {
+            font-size: 10px;
+            color: #999;
+            margin-bottom: 5px;
+        }
+
+        .shard-bar-container {
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .shard-bar-fill {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .shard-value {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
         }
     </style>
 </head>
@@ -433,6 +477,9 @@
                     <div class="stat-label">服务状态</div>
                     <div class="stat-value" id="statAsyncRunning" style="font-size: 14px;">-</div>
                 </div>
+            </div>
+            <div id="shardContainer" class="shard-grid">
+                <!-- 动态分片状态 -->
             </div>
         </div>
     </div>
@@ -866,6 +913,13 @@
             } else {
                 const cards = Object.values(pipelines).map(pipeline => {
                     totalEvents += pipeline.processedEvents;
+                    const lastEvent = pipeline.lastProcessedTime ? formatDateTime(pipeline.lastProcessedTime) : '从未处理';
+                    const errorHtml = pipeline.lastError ? `
+                        <div class="pipeline-info-error" title="${pipeline.lastError}">
+                            ⚠️ 异常: ${pipeline.lastError.length > 50 ? pipeline.lastError.substring(0, 50) + '...' : pipeline.lastError}
+                        </div>
+                    ` : '';
+
                     return `
                             <div class="pipeline-card ${pipeline.running ? 'running' : 'stopped'}">
                                 <div class="pipeline-header">
@@ -875,11 +929,11 @@
                                     </div>
                                 </div>
                                 <div class="pipeline-info">
-                                    <div><span class="pipeline-info-label">数据库:</span> ${pipeline.dbHostname}</div>
                                     <div><span class="pipeline-info-label">表:</span> ${pipeline.schemaName}.${pipeline.tableName}</div>
-                                    <div><span class="pipeline-info-label">Topic:</span> ${pipeline.rocketmqTopic}</div>
-                                    <div><span class="pipeline-info-label">事件数:</span> ${pipeline.processedEvents}</div>
-                                    <div><span class="pipeline-info-label">LSN:</span> ${pipeline.currentLsn}</div>
+                                    <div><span class="pipeline-info-label">事件数:</span> <b style="color:#667eea">${pipeline.processedEvents}</b></div>
+                                    <div><span class="pipeline-info-label">当前位置:</span> <span style="font-family:monospace; color:#28a745">${pipeline.currentLsn}</span></div>
+                                    <div style="font-size:10px; color:#999; margin-top:5px;">最后事件: ${lastEvent}</div>
+                                    ${errorHtml}
                                 </div>
                                 <div class="pipeline-actions">
                                     <button class="btn-success btn-small" onclick="restartPipeline(${pipeline.configId})">🔧 重启</button>
@@ -917,6 +971,28 @@
             document.getElementById('statTotalFailed').textContent = stats.totalFailed;
             document.getElementById('statQueuedSize').textContent = stats.queuedSize;
             document.getElementById('statAsyncRunning').textContent = stats.running ? '✅ 运行中' : '⭕ 已停止';
+
+            // 渲染分片状态
+            const shardContainer = document.getElementById('shardContainer');
+            if (stats.shards && stats.shards.length > 0) {
+                shardContainer.innerHTML = stats.shards.map(shard => {
+                    // 计算百分比（假设单队列上限为 2500，根据 init 中的 queueSize/threads 估算）
+                    const percentage = Math.min(100, (shard.queueSize / 2500) * 100);
+                    let barColor = '#667eea';
+                    if (percentage > 80) barColor = '#dc3545';
+                    else if (percentage > 50) barColor = '#ffc107';
+
+                    return `
+                        <div class="shard-item">
+                            <div class="shard-label">分片 ${shard.id} 队列</div>
+                            <div class="shard-value">${shard.queueSize}</div>
+                            <div class="shard-bar-container">
+                                <div class="shard-bar-fill" style="width: ${percentage}%; background: ${barColor}"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
 
         } catch (error) {
             console.error('刷新异步统计失败:', error);

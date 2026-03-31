@@ -274,6 +274,8 @@ public class MultiConfigCdcPipelineManager {
         private String tableName;
         private String rocketmqTopic;
         private String rocketmqTag;
+        private String lastError;
+        private LocalDateTime lastProcessedTime;
     }
 
     /**
@@ -291,6 +293,8 @@ public class MultiConfigCdcPipelineManager {
         private final AtomicLong processedEventCount = new AtomicLong(0);
         private volatile String currentLsn = "N/A";
         private volatile boolean running = false;
+        private volatile String lastError = null;
+        private volatile LocalDateTime lastProcessedTime = null;
 
         public boolean isRunning() {
             return running;
@@ -324,8 +328,10 @@ public class MultiConfigCdcPipelineManager {
                 .using((success, message, error) -> {
                     if (success) {
                         log.info("配置 {} 的 Debezium 引擎完成: {}", config.getId(), message);
+                        lastError = null;
                     } else {
                         log.error("配置 {} 的 Debezium 引擎错误: {}", config.getId(), message, error);
+                        lastError = (error != null ? error.getMessage() : message);
                     }
                 })
                 .build();
@@ -398,6 +404,7 @@ public class MultiConfigCdcPipelineManager {
                 );
 
                 long count = processedEventCount.incrementAndGet();
+                lastProcessedTime = LocalDateTime.now();
                 log.debug("配置 {} 处理变更事件 #{} - LSN: {}", config.getId(), count, lsn);
 
             } catch (Exception e) {
@@ -541,6 +548,8 @@ public class MultiConfigCdcPipelineManager {
             status.setTableName(config.getTableName());
             status.setRocketmqTopic(config.getRocketmqTopic());
             status.setRocketmqTag(config.getRocketmqTag());
+            status.setLastError(lastError);
+            status.setLastProcessedTime(lastProcessedTime);
             return status;
         }
     }
