@@ -70,6 +70,13 @@
             <version>${debezium.version}</version>
         </dependency>
 
+        <!-- Debezium JDBC Storage for Offsets -->
+        <dependency>
+            <groupId>io.debezium</groupId>
+            <artifactId>debezium-storage-jdbc</artifactId>
+            <version>${debezium.version}</version>
+        </dependency>
+
         <!-- RocketMQ Client -->
         <dependency>
             <groupId>org.apache.rocketmq</groupId>

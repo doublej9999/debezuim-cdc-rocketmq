@@ -29,7 +29,7 @@ app:
 
 # RocketMQ 配置
 rocketmq:
-  namesrv-addr: localhost:9876
+  namesrv-addr: 45.128.210.102:9876
   producer-group: debezium-cdc-producer
   topic: cdc-events2
   send-msg-timeout: 3000

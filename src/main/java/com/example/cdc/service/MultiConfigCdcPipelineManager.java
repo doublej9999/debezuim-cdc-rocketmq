@@ -355,18 +355,17 @@ public class MultiConfigCdcPipelineManager {
         private Properties buildDebeziumProperties() {
             Properties props = new Properties();
 
-            // 创建 offsets 目录（如果不存在）
-            java.io.File offsetsDir = new java.io.File("./offsets");
-            if (!offsetsDir.exists()) {
-                offsetsDir.mkdirs();
-                log.info("创建 offsets 目录: {}", offsetsDir.getAbsolutePath());
-            }
+
 
             // 基础配置
             props.setProperty("name", "debezium-" + config.getId());
             props.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
-            props.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
-            props.setProperty("offset.storage.file.filename", "./offsets/offset-" + config.getId() + ".dat");
+            props.setProperty("offset.storage", "io.debezium.storage.jdbc.offset.JdbcOffsetBackingStore");
+            props.setProperty("offset.storage.jdbc.url", "jdbc:postgresql://" + config.getDbHostname() + ":" + config.getDbPort() + "/" + config.getDbName());
+            props.setProperty("offset.storage.jdbc.user", config.getDbUser());
+            props.setProperty("offset.storage.jdbc.password", config.getDbPassword());
+            props.setProperty("offset.storage.jdbc.offset.table.name", "debezium_offset_storage_" + config.getId());
+            props.setProperty("offset.storage.jdbc.offset.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, offset_key VARCHAR(1255), offset_val VARCHAR(1255), record_insert_ts TIMESTAMP NOT NULL, record_insert_seq INTEGER NOT NULL, PRIMARY KEY(id))");
             props.setProperty("offset.flush.interval.ms", "2000");
             props.setProperty("topic.prefix", "dbserver-" + config.getId());
             props.setProperty("key.converter.schemas.enable", "false");
@@ -398,8 +397,12 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("snapshot.fetch.size", "2048");
 
             // Schema History - 同样放到 offsets 目录
-            props.setProperty("schema.history.internal", "io.debezium.relational.history.FileDatabaseHistory");
-            props.setProperty("schema.history.internal.file.filename", "./offsets/schema-history-" + config.getId() + ".dat");
+            props.setProperty("schema.history.internal", "io.debezium.storage.jdbc.history.JdbcSchemaHistory");
+            props.setProperty("schema.history.internal.jdbc.url", "jdbc:postgresql://" + config.getDbHostname() + ":" + config.getDbPort() + "/" + config.getDbName());
+            props.setProperty("schema.history.internal.jdbc.user", config.getDbUser());
+            props.setProperty("schema.history.internal.jdbc.password", config.getDbPassword());
+            props.setProperty("schema.history.internal.jdbc.schema.history.table.name", "debezium_database_history_" + config.getId());
+            props.setProperty("schema.history.internal.jdbc.schema.history.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, history_record VARCHAR(65000), history_record_seq INTEGER, PRIMARY KEY(id))");
 
             // 性能优化
             props.setProperty("max.batch.size", "2048");
