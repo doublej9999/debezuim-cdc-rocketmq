@@ -137,18 +137,25 @@ public class EventLogService {
         if (daysToKeep < 1 || daysToKeep > 3650) {
             throw new IllegalArgumentException("daysToKeep must be between 1 and 3650");
         }
-        LocalDateTime cutoffTime = LocalDateTime.now().minusDays(daysToKeep);
-        eventLogRepository.deleteByStatusAndCreatedAtBefore(EventLog.EventStatus.SENT, cutoffTime);
-        log.info("清理 {} 之前的已发送事件", cutoffTime);
+        LocalDateTime sentCutoff = LocalDateTime.now().minusDays(daysToKeep);
+        eventLogRepository.deleteByStatusAndCreatedAtBefore(EventLog.EventStatus.SENT, sentCutoff);
+        log.info("清理 {} 之前的已发送事件", sentCutoff);
+
+        // 所有状态的事件在 2 倍保留天数后强制清理（防止 FAILED/RETRY 无限堆积）
+        LocalDateTime allCutoff = LocalDateTime.now().minusDays(daysToKeep * 2L);
+        eventLogRepository.deleteByCreatedAtBefore(allCutoff);
+        log.info("清理 {} 之前的所有过期事件（包括 FAILED/RETRY）", allCutoff);
     }
 
     /**
-     * 每天凌晨 2 点自动清理已发送的旧事件日志
+     * 每天凌晨 2 点自动清理旧事件日志
+     * - 已发送事件：保留 N 天（默认 3 天）
+     * - 所有事件：保留 2N 天后强制清理
      */
     @Scheduled(cron = "0 0 2 * * ?")
     @Transactional
     public void scheduledCleanup() {
-        log.info("开始自动清理 {} 天前的已发送事件...", cleanupDays);
+        log.info("开始自动清理旧事件日志（已发送: {}天, 所有状态: {}天）...", cleanupDays, cleanupDays * 2);
         try {
             cleanupOldEvents(cleanupDays);
             log.info("自动清理完成");

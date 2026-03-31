@@ -334,7 +334,10 @@ public class MultiConfigCdcPipelineManager {
                 String tag = config.getRocketmqTag() != null ? config.getRocketmqTag() : config.getTableName();
                 String messageKey = extractPrimaryKey(value, event.key());
 
-                asyncEventSenderService.enqueueEvent(topic, tag, messageKey, value, config.getId());
+                asyncEventSenderService.enqueueEvent(
+                    topic, tag, messageKey, value, config.getId(),
+                    config.getRocketmqNamesrvAddr(), config.getRocketmqProducerGroup()
+                );
 
                 long count = processedEventCount.incrementAndGet();
                 log.debug("配置 {} 处理变更事件 #{} - LSN: {}", config.getId(), count, lsn);

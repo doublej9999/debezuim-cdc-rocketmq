@@ -73,6 +73,11 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
      */
     void deleteByStatusAndCreatedAtBefore(EventLog.EventStatus status, LocalDateTime before);
 
+    /**
+     * 删除指定时间之前的所有事件（不限状态，用于彻底清理过期数据减少 WAL 压力）
+     */
+    void deleteByCreatedAtBefore(LocalDateTime before);
+
     @Modifying
     @Query("update EventLog e set e.status = 'SENT', e.sentAt = :sentAt where e.id = :eventId")
     int markAsSent(@Param("eventId") Long eventId, @Param("sentAt") LocalDateTime sentAt);

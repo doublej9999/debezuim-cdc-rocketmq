@@ -46,6 +46,17 @@ async:
       interval:
         seconds: 60  # 重试间隔（秒）
 
+# 事件日志清理配置
+event:
+  cleanup:
+    days: 3  # 保留天数（从 30 天缩短到 3 天以减少表膨胀）
+
+# WAL 优化配置
+wal:
+  optimization:
+    unlogged-event-log: true    # 将 event_log 设为 UNLOGGED TABLE（消除 WAL 写入放大）
+    cleanup-inactive-slots: true # 启动时自动清理不活跃的 Replication Slot
+
 
 # 日志配置
 logging:
