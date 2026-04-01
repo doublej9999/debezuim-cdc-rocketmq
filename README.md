@@ -25,8 +25,12 @@
     - **WAL 堆积监控**：每小时检查 WAL 留存大小，超过阈值（默认 1GB，可配置）触发强告警。
     - **停用回收**：配置停用过久（>7天）自动清理复制资源，防止撑爆主库磁盘。
 
-### 5. 数据可靠性加固 (Reliability)
-- **TEXT 存储方案**：Offset 与 Schema History 存储 DDL 采用 `TEXT` 类型，解决大容量位移记录的溢出风险。
+### 5. 数据可靠性与幂等性 (Idempotency & Reliability)
+- **本地事件表模式 (Transactional Outbox)**：所有 CDC 事件在发送前先进入本地 PostgreSQL `event_log` 表，确保即使应用崩溃，事件也不会丢失。
+- **基于 Source LSN 的发送端幂等**：利用 Debezium 的 LSN (Log Sequence Number) 作为唯一标识，在入队前进行冲突检测。
+    - **重启不重复**：有效解决 Debezium Offset 刷新延迟导致的重启后数据重复推送问题。
+    - **唯一约束保障**：数据库层 `(config_id, lsn)` 唯一索引，强制保证同一变更仅被处理一次。
+- **启动自动补偿机制**：应用启动时，`AsyncEventSenderService` 会自动拉取数据库中所有 `PENDING` 或 `RETRY` 状态的事件并重新入队，实现“断点续传”。
 - **优雅停机优化**：在关停管道时，主线程会严格等待 Debezium 引擎 Flush 完最后的位点信息，最大程度减少重复消费。
 
 ### 6. 全栈监控看板 (Unified Monitoring)
