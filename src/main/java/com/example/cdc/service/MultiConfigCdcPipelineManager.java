@@ -289,6 +289,7 @@ public class MultiConfigCdcPipelineManager {
         private final ObjectMapper objectMapper;
 
         private DebeziumEngine<ChangeEvent<String, String>> engine;
+        private Future<?> engineFuture;
         private LocalDateTime startTime;
         private final AtomicLong processedEventCount = new AtomicLong(0);
         private volatile String currentLsn = "N/A";
@@ -337,7 +338,7 @@ public class MultiConfigCdcPipelineManager {
                 .build();
 
             // 在虚拟线程中异步启动引擎
-            executor.submit(() -> {
+            engineFuture = executor.submit(() -> {
                 try {
                     running = true;
                     startTime = LocalDateTime.now();
@@ -363,9 +364,18 @@ public class MultiConfigCdcPipelineManager {
 
             try {
                 if (engine != null) {
-                    // 给引擎一些时间来优雅关闭
+                    log.info("正在关闭配置 {} 的 Debezium 引擎...", config.getId());
                     engine.close();
-                    log.info("配置 {} 的 Debezium 引擎已关闭", config.getId());
+                    
+                    // 等待引擎线程彻底退出，确保最后的 Offset 已刷新到数据库
+                    if (engineFuture != null) {
+                        try {
+                            engineFuture.get(10, TimeUnit.SECONDS);
+                            log.info("配置 {} 的引擎线程已正常退出", config.getId());
+                        } catch (TimeoutException e) {
+                            log.warn("等待配置 {} 的引擎退出超时", config.getId());
+                        }
+                    }
                 }
             } catch (Exception e) {
                 log.warn("关闭 Debezium 引擎时出错: {}", e.getMessage());
@@ -428,7 +438,7 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("offset.storage.jdbc.user", config.getDbUser());
             props.setProperty("offset.storage.jdbc.password", config.getDbPassword());
             props.setProperty("offset.storage.jdbc.offset.table.name", "debezium_offset_storage_" + config.getId());
-            props.setProperty("offset.storage.jdbc.offset.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, offset_key VARCHAR(1255), offset_val VARCHAR(1255), record_insert_ts TIMESTAMP NOT NULL, record_insert_seq INTEGER NOT NULL, PRIMARY KEY(id))");
+            props.setProperty("offset.storage.jdbc.offset.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, offset_key TEXT, offset_val TEXT, record_insert_ts TIMESTAMP NOT NULL, record_insert_seq INTEGER NOT NULL, PRIMARY KEY(id))");
             props.setProperty("offset.flush.interval.ms", "2000");
             props.setProperty("topic.prefix", "dbserver-" + config.getId());
             props.setProperty("key.converter.schemas.enable", "false");
@@ -465,7 +475,7 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("schema.history.internal.jdbc.user", config.getDbUser());
             props.setProperty("schema.history.internal.jdbc.password", config.getDbPassword());
             props.setProperty("schema.history.internal.jdbc.schema.history.table.name", "debezium_database_history_" + config.getId());
-            props.setProperty("schema.history.internal.jdbc.schema.history.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, history_record VARCHAR(65000), history_record_seq INTEGER, PRIMARY KEY(id))");
+            props.setProperty("schema.history.internal.jdbc.schema.history.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, history_record TEXT, history_record_seq INTEGER, PRIMARY KEY(id))");
 
             // 性能优化
             props.setProperty("max.batch.size", "2048");

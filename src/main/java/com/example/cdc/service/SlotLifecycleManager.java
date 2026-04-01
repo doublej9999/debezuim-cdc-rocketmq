@@ -34,12 +34,12 @@ public class SlotLifecycleManager {
     private final DataSourceConfigService configService;
     private final PgReplicationService pgReplicationService;
     
-    // 告警阈值（停用超过 3 天且存在资源）
+    // WAL 堆积告警阈值（从配置读取，默认 1GB）
+    @org.springframework.beans.factory.annotation.Value("${cdc.wal.warning.threshold-bytes:1073741824}")
+    private long walRetainedThresholdBytes;
+
     private static final int INACTIVE_ALERT_THRESHOLD_DAYS = 3;
-    // 强制清理阈值（停用超过 7 天）
     private static final int INACTIVE_CLEANUP_THRESHOLD_DAYS = 7;
-    // WAL 堆积告警阈值（例如：超过 1GB）
-    private static final long WAL_RETAINED_THRESHOLD_BYTES = 1024 * 1024 * 1024L;
 
     /**
      * 启动时自动执行巡检
@@ -112,10 +112,10 @@ public class SlotLifecycleManager {
                 
                 for (PgReplicationService.ReplicationSlotInfo slot : slots) {
                     if (slot.getSlotName().equals(targetSlotName)) {
-                        if (slot.getRetainedWalBytes() > WAL_RETAINED_THRESHOLD_BYTES) {
+                        if (slot.getRetainedWalBytes() > walRetainedThresholdBytes) {
                             log.error("【强告警】配置 [{}] (ID: {}) 的复制槽 {} 堆积 WAL 过多: {} MB。请检查订阅端消费情况！", 
                                     config.getName(), config.getId(), targetSlotName, slot.getRetainedWalBytes() / 1024 / 1024);
-                        } else if (slot.getRetainedWalBytes() > WAL_RETAINED_THRESHOLD_BYTES / 2) {
+                        } else if (slot.getRetainedWalBytes() > walRetainedThresholdBytes / 2) {
                             log.warn("【预警】配置 [{}] (ID: {}) 的复制槽 {} WAL 堆积超过 50%: {} MB",
                                     config.getName(), config.getId(), targetSlotName, slot.getRetainedWalBytes() / 1024 / 1024);
                         }
@@ -239,8 +239,8 @@ public class SlotLifecycleManager {
                     for (PgReplicationService.ReplicationSlotInfo slot : slots) {
                         if (slot.getSlotName().equals("debezium_slot_" + config.getId())) {
                             builder.retainedWalBytes(slot.getRetainedWalBytes());
-                            if (slot.getRetainedWalBytes() >= WAL_RETAINED_THRESHOLD_BYTES) alertLevel = "ERROR";
-                            else if (slot.getRetainedWalBytes() >= WAL_RETAINED_THRESHOLD_BYTES / 2) alertLevel = "WARN";
+                            if (slot.getRetainedWalBytes() >= walRetainedThresholdBytes) alertLevel = "ERROR";
+                            else if (slot.getRetainedWalBytes() >= walRetainedThresholdBytes / 2) alertLevel = "WARN";
                         }
                     }
                 } catch (Exception e) {

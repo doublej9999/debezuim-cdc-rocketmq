@@ -54,6 +54,15 @@ async:
       interval:
         seconds: 60  # 重试间隔（秒）
 
+# CDC 全局配置
+cdc:
+  watchdog:
+    interval:
+      ms: 60000  # 看门狗巡检间隔
+  wal:
+    warning:
+      threshold-bytes: 1073741824  # WAL 堆积告警阈值 (1GB)
+
 # 事件日志清理配置
 event:
   cleanup:
