@@ -22,6 +22,11 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
      * 根据配置 ID 查询事件日志（分页）
      */
     Page<EventLog> findByConfigIdOrderByCreatedAtDesc(Long configId, Pageable pageable);
+    
+    /**
+     * 根据配置 ID 和 LSN 判断事件是否已存在（幂等检查）
+     */
+    boolean existsByConfigIdAndLsn(Long configId, String lsn);
 
     /**
      * 根据状态查询事件日志（分页）

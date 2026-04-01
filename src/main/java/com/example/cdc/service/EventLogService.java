@@ -37,7 +37,16 @@ public class EventLogService {
 
     @Transactional
     public EventLog createEventLog(Long configId, String topic, String tag, String key, String body,
-                                   String namesrvAddr, String producerGroup) {
+                                   String namesrvAddr, String producerGroup, String lsn) {
+        // 幂等检查：如果该 LSN 已存在，则不再创建且不抛出错误，静默跳过
+        if (lsn != null && !lsn.isEmpty()) {
+            boolean exists = eventLogRepository.existsByConfigIdAndLsn(configId, lsn);
+            if (exists) {
+                log.debug("事件已存在，命中幂等策略 - ConfigId: {}, LSN: {}", configId, lsn);
+                return null;
+            }
+        }
+
         EventLog eventLog = EventLog.builder()
             .configId(configId)
             .topic(topic)
@@ -46,6 +55,7 @@ public class EventLogService {
             .messageBody(body)
             .namesrvAddr(namesrvAddr)
             .producerGroup(producerGroup)
+            .lsn(lsn)
             .status(EventLog.EventStatus.PENDING)
             .retryCount(0)
             .maxRetry(3)
@@ -187,6 +197,7 @@ public class EventLogService {
             .retryCount(eventLog.getRetryCount())
             .maxRetry(eventLog.getMaxRetry())
             .errorMessage(eventLog.getErrorMessage())
+            .lsn(eventLog.getLsn())
             .createdAt(eventLog.getCreatedAt())
             .sentAt(eventLog.getSentAt())
             .build();

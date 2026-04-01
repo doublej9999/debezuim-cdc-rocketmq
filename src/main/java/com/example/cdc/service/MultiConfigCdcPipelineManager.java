@@ -410,7 +410,7 @@ public class MultiConfigCdcPipelineManager {
 
                 asyncEventSenderService.enqueueEvent(
                     topic, tag, messageKey, value, config.getId(),
-                    config.getRocketmqNamesrvAddr(), config.getRocketmqProducerGroup()
+                    config.getRocketmqNamesrvAddr(), config.getRocketmqProducerGroup(), lsn
                 );
 
                 long count = processedEventCount.incrementAndGet();

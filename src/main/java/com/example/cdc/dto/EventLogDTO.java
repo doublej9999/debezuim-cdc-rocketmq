@@ -23,6 +23,7 @@ public class EventLogDTO {
     private String topic;
     private String tag;
     private String messageKey;
+    private String lsn;
     private EventLog.EventStatus status;
     private Integer retryCount;
     private Integer maxRetry;

@@ -17,7 +17,8 @@ import java.time.LocalDateTime;
     @Index(name = "idx_config_id", columnList = "config_id"),
     @Index(name = "idx_status", columnList = "status"),
     @Index(name = "idx_created_at", columnList = "created_at"),
-    @Index(name = "idx_status_retry_created", columnList = "status, retry_count, created_at")
+    @Index(name = "idx_status_retry_created", columnList = "status, retry_count, created_at"),
+    @Index(name = "idx_config_lsn", columnList = "config_id, lsn", unique = true)
 })
 @Data
 @Builder
@@ -103,6 +104,9 @@ public class EventLog {
      */
     @Column(name = "producer_group", length = 255)
     private String producerGroup;
+
+    @Column(name = "lsn", length = 128)
+    private String lsn;
 
     /**
      * 创建时间

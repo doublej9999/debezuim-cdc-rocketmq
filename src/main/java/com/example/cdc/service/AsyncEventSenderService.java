@@ -119,44 +119,72 @@ public class AsyncEventSenderService {
      * 将事件入队，根据 Key 进行 Hash 路由到指定分片队列
      */
     public void enqueueEvent(String topic, String tag, String key, String body, Long configId,
-                             String namesrvAddr, String producerGroup) {
+                             String namesrvAddr, String producerGroup, String lsn) {
         if (!running) {
             log.warn("异步发送服务未运行，事件被丢弃 - ConfigId: {}, Topic: {}", configId, topic);
             return;
         }
 
         try {
-            // 1. 持久化日志（确保数据库中有记录）
+            // 1. 持久化日志（带 LSN 幂等检查）
             EventLog eventLog = eventLogService.createEventLog(configId, topic, tag, key, body,
-                    namesrvAddr, producerGroup);
+                    namesrvAddr, producerGroup, lsn);
+            
+            // 如果返回 null，说明触发了幂等检查，此事件已处理过
+            if (eventLog == null) {
+                return;
+            }
             
             ChangeEventMessage message = new ChangeEventMessage(
                 topic, tag, key, body, configId, eventLog.getId(), namesrvAddr, producerGroup
             );
 
-            // 2. Hash 路由：确保相同的 Key 路由到同一个 Queue，从而由同一个处理线程顺序发送
-            // 如果 key 为空（通常不应该），则按 configId 路由以保证表级顺序
-            int routeKey = (key != null && !key.isBlank()) ? key.hashCode() : configId.hashCode();
-            int queueIndex = Math.abs(routeKey) % senderThreads;
-            BlockingQueue<ChangeEventMessage> targetQueue = eventQueues.get(queueIndex);
-
-            boolean offered = targetQueue.offer(message);
-            if (offered) {
-                totalEnqueued.incrementAndGet();
-                enqueuedCounter.increment();
-                log.debug("事件已入分片队列 {} - ConfigId: {}, Topic: {}, EventId: {}, 队列当前大小: {}",
-                    queueIndex, configId, topic, eventLog.getId(), targetQueue.size());
-            } else {
-                totalFailed.incrementAndGet();
-                failedCounter.increment();
-                log.warn("分片队列 {} 已满，事件已持久化等待重试 - ConfigId: {}, Topic: {}, EventId: {}",
-                    queueIndex, configId, topic, eventLog.getId());
-            }
+            // 2. 路由并入队
+            routeAndOffer(message);
+            
         } catch (Exception e) {
             totalFailed.incrementAndGet();
             failedCounter.increment();
             log.error("处理事件入队失败 - ConfigId: {}, Topic: {}, Error: {}",
                 configId, topic, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 将已有的事件重新入队（用于补偿或重试），不再创建新的数据库记录
+     */
+    private void reEnqueueEvent(EventLog eventLog) {
+        if (eventLog == null || eventLog.getId() == null) return;
+        
+        ChangeEventMessage message = new ChangeEventMessage(
+            eventLog.getTopic(), eventLog.getTag(), eventLog.getMessageKey(),
+            eventLog.getMessageBody(), eventLog.getConfigId(), eventLog.getId(),
+            eventLog.getNamesrvAddr(), eventLog.getProducerGroup()
+        );
+        
+        routeAndOffer(message);
+    }
+
+    /**
+     * 核心路由逻辑：根据 Key 进行 Hash 路由到指定分片队列
+     */
+    private void routeAndOffer(ChangeEventMessage message) {
+        // Hash 路由：确保相同的 Key 路由到同一个 Queue，从而由同一个处理线程顺序发送
+        int routeKey = (message.key != null && !message.key.isBlank()) ? message.key.hashCode() : message.configId.hashCode();
+        int queueIndex = Math.abs(routeKey) % senderThreads;
+        BlockingQueue<ChangeEventMessage> targetQueue = eventQueues.get(queueIndex);
+
+        boolean offered = targetQueue.offer(message);
+        if (offered) {
+            totalEnqueued.incrementAndGet();
+            enqueuedCounter.increment();
+            log.debug("事件已入分片队列 {} - ConfigId: {}, Topic: {}, EventId: {}, 队列当前大小: {}",
+                queueIndex, message.configId, message.topic, message.eventId, targetQueue.size());
+        } else {
+            totalFailed.incrementAndGet();
+            failedCounter.increment();
+            log.warn("分片队列 {} 已满，事件等待重试 - ConfigId: {}, Topic: {}, EventId: {}",
+                queueIndex, message.configId, message.topic, message.eventId);
         }
     }
 
@@ -300,15 +328,7 @@ public class AsyncEventSenderService {
 
             log.info("启动补偿加载 {} 条待发送/重试事件", pending.size());
             for (EventLog event : pending) {
-                enqueueEvent(
-                    event.getTopic(),
-                    event.getTag(),
-                    event.getMessageKey(),
-                    event.getMessageBody(),
-                    event.getConfigId(),
-                    event.getNamesrvAddr(),
-                    event.getProducerGroup()
-                );
+                reEnqueueEvent(event);
             }
         } catch (Exception e) {
             log.error("启动补偿加载失败: {}", e.getMessage(), e);
@@ -374,17 +394,8 @@ public class AsyncEventSenderService {
 
             int processed = 0;
             for (EventLog event : pendingEvents) {
-                // 重试也需要入路由队列以保证顺序，或者在此单线程同步重试（若不要求重试与实时事件的交替顺序）
-                // 为了简单且不破坏该 Key 的实时顺序，我们重新入队处理
-                enqueueEvent(
-                    event.getTopic(),
-                    event.getTag(),
-                    event.getMessageKey(),
-                    event.getMessageBody(),
-                    event.getConfigId(),
-                    event.getNamesrvAddr(),
-                    event.getProducerGroup()
-                );
+                // 重试也需要入路由队列以保证顺序
+                reEnqueueEvent(event);
                 processed++;
             }
 
