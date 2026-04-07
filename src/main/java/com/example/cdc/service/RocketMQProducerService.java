@@ -20,10 +20,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * RocketMQ 生产者服务。
- * 支持默认生产者和按配置动态路由的生产者实例。
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -52,7 +48,6 @@ public class RocketMQProducerService {
 
             SendResult sendResult;
             if (isOrderlyEnabled() && key != null && !key.isBlank()) {
-                // 使用 key 做 sharding，确保同 key 路由到固定队列实现顺序消费
                 MessageQueueSelector selector = (mqs, msg, arg) -> {
                     int index = Math.floorMod(arg.hashCode(), mqs.size());
                     return mqs.get(index);
@@ -79,20 +74,23 @@ public class RocketMQProducerService {
         sendMessage(null, null, topic, tag, key, body);
     }
 
-    /**
-     * 批量发送消息（要求同一 Topic）
-     */
     public void sendBatchMessages(List<Message> messages) {
+        sendBatchMessages(null, null, messages);
+    }
+
+    public void sendBatchMessages(String namesrvAddr, String producerGroup, List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return;
         }
         try {
-            SendResult sendResult = defaultProducer.send(messages);
-            log.debug("批量消息发送成功 - Topic: {}, MsgCount: {}, MsgId: {}, Status: {}",
-                messages.get(0).getTopic(), messages.size(), sendResult.getMsgId(), sendResult.getSendStatus());
+            DefaultMQProducer producer = getProducer(namesrvAddr, producerGroup);
+            SendResult sendResult = producer.send(messages);
+            log.debug("批量消息发送成功 - NameServer: {}, ProducerGroup: {}, Topic: {}, MsgCount: {}, MsgId: {}, Status: {}",
+                    producer.getNamesrvAddr(), producer.getProducerGroup(), messages.get(0).getTopic(),
+                    messages.size(), sendResult.getMsgId(), sendResult.getSendStatus());
         } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
             log.error("批量消息发送失败 - Topic: {}, MsgCount: {}, Error: {}",
-                messages.get(0).getTopic(), messages.size(), e.getMessage(), e);
+                    messages.get(0).getTopic(), messages.size(), e.getMessage(), e);
             throw new RuntimeException("RocketMQ 批量消息发送失败", e);
         }
     }
@@ -181,3 +179,4 @@ public class RocketMQProducerService {
     private record ProducerHolder(DefaultMQProducer producer, String instanceName) {
     }
 }
+

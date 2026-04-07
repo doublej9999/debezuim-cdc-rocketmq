@@ -24,7 +24,6 @@ public class DataSourceConfigMapper {
                 .rocketmqTag(config.getRocketmqTag())
                 .rocketmqNamesrvAddr(config.getRocketmqNamesrvAddr())
                 .rocketmqProducerGroup(config.getRocketmqProducerGroup())
-                .offsetKey(config.getOffsetKey())
                 .isActive(config.getIsActive())
                 .createdAt(config.getCreatedAt())
                 .updatedAt(config.getUpdatedAt())

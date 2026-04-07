@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS datasource_config (
     rocketmq_tag VARCHAR(255),
     rocketmq_namesrv_addr VARCHAR(255),
     rocketmq_producer_group VARCHAR(255),
-    offset_key VARCHAR(64),
     is_active BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -37,7 +36,6 @@ INSERT INTO datasource_config (
     rocketmq_tag,
     rocketmq_namesrv_addr,
     rocketmq_producer_group,
-    offset_key,
     is_active
 )
 VALUES (
@@ -53,7 +51,6 @@ VALUES (
     'users',
     'localhost:9876',
     'debezium-cdc-producer-demo',
-    'cfg-demo-users',
     false
 )
 ON CONFLICT DO NOTHING;

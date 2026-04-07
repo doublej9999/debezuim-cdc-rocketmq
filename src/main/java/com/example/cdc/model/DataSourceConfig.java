@@ -52,9 +52,6 @@ public class DataSourceConfig {
     @Column(name = "rocketmq_producer_group")
     private String rocketmqProducerGroup;
 
-    @Column(name = "offset_key", length = 64)
-    private String offsetKey;
-
     @Column(name = "is_active")
     private Boolean isActive = false;
 

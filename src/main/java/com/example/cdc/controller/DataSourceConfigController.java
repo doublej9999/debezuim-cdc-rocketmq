@@ -7,6 +7,7 @@ import com.example.cdc.exception.EntityNotFoundException;
 import com.example.cdc.model.DataSourceConfig;
 import com.example.cdc.service.DataSourceConfigService;
 import com.example.cdc.service.MultiConfigCdcPipelineManager;
+import com.example.cdc.service.PasswordCryptoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ public class DataSourceConfigController {
     private final DataSourceConfigService configService;
     private final MultiConfigCdcPipelineManager pipelineManager;
     private final DataSourceConfigMapper configMapper;
+    private final PasswordCryptoService passwordCryptoService;
 
     @GetMapping
     public ResponseEntity<List<DataSourceConfigResponse>> getAllConfigs() {
@@ -47,6 +49,7 @@ public class DataSourceConfigController {
 
     @PostMapping
     public ResponseEntity<DataSourceConfigResponse> createConfig(@Valid @RequestBody DataSourceConfigRequest request) {
+        request.setDbPassword(passwordCryptoService.decodeIfEncrypted(request.getDbPassword()));
         DataSourceConfig saved = configService.createConfig(configMapper.toEntity(request));
         return ResponseEntity.status(HttpStatus.CREATED).body(configMapper.toResponse(saved));
     }
@@ -62,6 +65,7 @@ public class DataSourceConfigController {
         DataSourceConfig existing = existingOpt.get();
         boolean wasActive = Boolean.TRUE.equals(existing.getIsActive());
 
+        request.setDbPassword(passwordCryptoService.decodeIfEncrypted(request.getDbPassword()));
         DataSourceConfig requestEntity = configMapper.toEntity(request);
         if (request.getIsActive() == null) {
             requestEntity.setIsActive(existing.getIsActive());
@@ -126,7 +130,6 @@ public class DataSourceConfigController {
                 || !Objects.equals(oldConfig.getRocketmqTopic(), newConfig.getRocketmqTopic())
                 || !Objects.equals(oldConfig.getRocketmqTag(), newConfig.getRocketmqTag())
                 || !Objects.equals(oldConfig.getRocketmqNamesrvAddr(), newConfig.getRocketmqNamesrvAddr())
-                || !Objects.equals(oldConfig.getRocketmqProducerGroup(), newConfig.getRocketmqProducerGroup())
-                || !Objects.equals(oldConfig.getOffsetKey(), newConfig.getOffsetKey());
+                || !Objects.equals(oldConfig.getRocketmqProducerGroup(), newConfig.getRocketmqProducerGroup());
     }
 }

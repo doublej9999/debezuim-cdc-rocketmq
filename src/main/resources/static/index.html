@@ -725,12 +725,16 @@
     const API_BASE = '/api';
     const DATASOURCE_API = '/api/datasource';
     const PIPELINE_API = '/api/pipeline';
+    const SECURITY_API = '/api/security';
     let editingConfigId = null;
     let editingConfigActive = false;
+    let passwordPublicKeyPem = '';
+    let passwordEncryptPrefix = 'ENC_RSA:';
 
     document.addEventListener('DOMContentLoaded', () => {
         loadConfigs();
         refreshAllStatus();
+        loadPasswordPublicKey();
         bindEventLogFilters();
         setInterval(refreshAllStatus, 5000);
     });
@@ -744,6 +748,7 @@
         const requestMethod = isEditMode ? 'PUT' : 'POST';
 
         try {
+            config.dbPassword = await encryptPasswordForTransport(config.dbPassword);
             const response = await fetch(requestUrl, {
                 method: requestMethod,
                 headers: {'Content-Type': 'application/json'},
@@ -779,6 +784,68 @@
             rocketmqProducerGroup: document.getElementById('rocketmqProducerGroup').value,
             isActive: editingConfigId !== null ? editingConfigActive : false
         };
+    }
+
+    async function loadPasswordPublicKey() {
+        try {
+            const response = await fetch(`${SECURITY_API}/password-public-key`);
+            if (!response.ok) {
+                return;
+            }
+            const payload = await response.json();
+            if (payload.publicKeyPem) {
+                passwordPublicKeyPem = payload.publicKeyPem;
+            }
+            if (payload.prefix) {
+                passwordEncryptPrefix = payload.prefix;
+            }
+        } catch (error) {
+            console.error('加载密码加密公钥失败:', error);
+        }
+    }
+
+    async function encryptPasswordForTransport(plainPassword) {
+        if (!plainPassword || !window.crypto?.subtle || !passwordPublicKeyPem) {
+            return plainPassword;
+        }
+
+        const publicKey = await window.crypto.subtle.importKey(
+            'spki',
+            pemToArrayBuffer(passwordPublicKeyPem),
+            {name: 'RSA-OAEP', hash: 'SHA-256'},
+            false,
+            ['encrypt']
+        );
+
+        const encryptedBuffer = await window.crypto.subtle.encrypt(
+            {name: 'RSA-OAEP'},
+            publicKey,
+            new TextEncoder().encode(plainPassword)
+        );
+
+        return passwordEncryptPrefix + arrayBufferToBase64(encryptedBuffer);
+    }
+
+    function pemToArrayBuffer(pem) {
+        const base64 = pem
+            .replace('-----BEGIN PUBLIC KEY-----', '')
+            .replace('-----END PUBLIC KEY-----', '')
+            .replace(/\s+/g, '');
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    function arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
     }
 
     function fillConfigFormForEdit(config) {

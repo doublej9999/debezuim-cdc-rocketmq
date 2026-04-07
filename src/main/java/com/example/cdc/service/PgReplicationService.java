@@ -1,3 +1,6 @@
+package com.example.cdc.service;
+
+import com.example.cdc.model.DataSourceConfig;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.annotation.PreDestroy;

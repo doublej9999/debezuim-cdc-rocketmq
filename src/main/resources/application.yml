@@ -59,6 +59,11 @@ cdc:
   watchdog:
     interval:
       ms: 60000  # 看门狗巡检间隔
+  heartbeat:
+    interval:
+      ms: 5000
+    action:
+      query: "SELECT 1"
   wal:
     warning:
       threshold-bytes: 1073741824  # WAL 堆积告警阈值 (1GB)

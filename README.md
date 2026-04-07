@@ -1,70 +1,110 @@
-# Debezium CDC RocketMQ 2.0 (High Performance & Reliable)
+# Debezium CDC RocketMQ 2.0
 
-基于 `Java 21` (虚拟线程)、`Spring Boot 3.4`、`Debezium 3.0`、`RocketMQ 4.9` 构建的生产级多数据源 CDC 管道管理系统。
+基于 `Java 21`、`Spring Boot 3.4`、`Debezium 3.0`、`RocketMQ 4.9` 的多数据源 CDC 管道管理系统，支持高可靠异步发送、顺序保障、WAL 治理与可视化管理。
 
-## 🌟 核心特性 (2026-04-01 优化版)
+## 主要能力
 
-本项目在基础 CDC 功能之上，针对大数据量同步、严格顺序性、系统自愈能力进行了全方位的工业级加固：
+- 多数据源 CDC 管道管理（启动、停止、重启、自动巡检）
+- Debezium 事件异步发送 RocketMQ，支持分片队列与顺序发送
+- 本地事件日志（`event_log`）保障可靠投递与补偿
+- 复制槽（slot）与 publication 生命周期治理
+- WAL 留存监控与告警
+- Web 管理页面（配置管理、管道状态、事件日志、治理面板）
 
-### 1. 严格顺序性保障 (Strict Ordering)
-- **Stripe-based Multi-Queue**：采用分片多队列方案，根据数据的 Primary Key 进行 Hash 路由。
-- **单线程定向消费**：每个 Key 路由到固定的异步分片队列，并由专职线程顺序发送，彻底解决网络重试或多线程竞态导致的变更乱序问题。
+## 最近更新（2026-04）
 
-### 2. 系统自愈与高可用 (Self-healing)
-- **Watchdog 看门狗任务**：内置巡检机制，每分钟自动检测管道健康度。若发现 Debezium 引擎异常终止，将触发自动重启。
-- **重启冷却机制**：针对永久性错误（如配置错误、权限不足）设有 5 分钟重启冷却期，防止无效重试导致服务器雪崩。
+本次版本已完成以下关键更新：
 
-### 3. 高性能异步发送架构 (High Performance)
-- **生产消费解耦**：Debezium 引擎仅负责读取 WAL，并通过内存队列解耦 RocketMQ 发送。
-- **虚拟线程 (Virtual Threads)**：利用 Java 21 虚拟线程运行 Debezium 引擎，极低资源消耗下支持上百个并发同步管道。
+1. Debezium 心跳机制
+- 在 Debezium 属性中增加 `heartbeat.interval.ms` 与 `heartbeat.action.query`。
+- 配置项：
+  - `cdc.heartbeat.interval.ms`（默认 `5000`）
+  - `cdc.heartbeat.action.query`（默认 `SELECT 1`）
 
-### 4. 资源治理与生命周期 (Governance)
-- **连接池化管理**：为每个数据源配置独立的 **HikariDataSource**，支持按需动态创建与优雅销毁。
-- **Replication Slot 生命周期治理**：
-    - **孤立资源清理**：启动时自动扫描并警示不再属于任何配置的“孤立”复制槽。
-    - **WAL 堆积监控**：每小时检查 WAL 留存大小，超过阈值（默认 1GB，可配置）触发强告警。
-    - **停用回收**：配置停用过久（>7天）自动清理复制资源，防止撑爆主库磁盘。
+2. WAL 留存显示优化
+- 生命周期治理状态中，无论配置是启用还是停用，都会尝试查询并展示对应 slot 的 `retainedWalBytes`。
 
-### 5. 数据可靠性与幂等性 (Idempotency & Reliability)
-- **本地事件表模式 (Transactional Outbox)**：所有 CDC 事件在发送前先进入本地 PostgreSQL `event_log` 表，确保即使应用崩溃，事件也不会丢失。
-- **基于 Source LSN 的发送端幂等**：利用 Debezium 的 LSN (Log Sequence Number) 作为唯一标识，在入队前进行冲突检测。
-    - **重启不重复**：有效解决 Debezium Offset 刷新延迟导致的重启后数据重复推送问题。
-    - **唯一约束保障**：数据库层 `(config_id, lsn)` 唯一索引，强制保证同一变更仅被处理一次。
-- **启动自动补偿机制**：应用启动时，`AsyncEventSenderService` 会自动拉取数据库中所有 `PENDING` 或 `RETRY` 状态的事件并重新入队，实现“断点续传”。
-- **优雅停机优化**：在关停管道时，主线程会严格等待 Debezium 引擎 Flush 完最后的位点信息，最大程度减少重复消费。
+3. 数据源配置字段清理
+- `datasource_config` 移除 `offset_key` 字段（模型/DTO/SQL 初始化脚本同步移除）。
 
-### 6. 全栈监控看板 (Unified Monitoring)
-- **实时 LSN 追踪**：直观查看每个管道的读取位置。
-- **分片队列可视化**：图表化展示 4 个（或 N 个）发送分片的队列积压状态。
-- **异常堆栈回显**：直接在 Web 界面查看 Debezium 引擎的实时报错信息。
+4. Debezium offset/schema-history 落表连接调整
+- `offset.storage.jdbc.*` 与 `schema.history.internal.jdbc.*` 改为直接读取 `spring.datasource`，不再使用业务数据源配置中的库连接信息。
 
----
+5. 重试状态机修复
+- 重试达到上限后状态会正确落为 `FAILED`（不再一直停留 `RETRY`）。
+- 手动重试支持 `FAILED/RETRY` 事件重置并重新入队。
 
-## 🚀 快速开始
+6. 前端请求密码传输加密
+- 增加密码公钥接口：`GET /api/security/password-public-key`
+- 前端提交数据源配置时对 `dbPassword` 进行 `RSA-OAEP(SHA-256)` 加密，后端解密后入库。
+- 传输密文前缀：`ENC_RSA:`
 
-### 1. 运行环境
+7. 批量发送生产者组路由修复
+- 批量发送按 `namesrvAddr + producerGroup + topic` 分组，不再固定使用默认生产者组。
+- 缺省时可按 `configId` 回查 `datasource_config` 的 `rocketmqProducerGroup/rocketmqNamesrvAddr`。
+
+## 快速开始
+
+## 1. 环境要求
+
 - JDK 21+
-- PostgreSQL 12+ (需开启逻辑复制 `wal_level = logical`)
+- PostgreSQL 12+（需启用逻辑复制）
 - RocketMQ 4.9+
 
-### 2. 启动项目
+## 2. 启动
+
 ```bash
 mvn clean package
 mvn spring-boot:run
 ```
-默认管理台地址：`http://localhost:8082`
 
----
+默认访问地址：
+- 管理页面：`http://localhost:8082`
 
-## 🛠 配置说明 (`application.yml`)
+## 3. 关键配置
 
-- **cdc.watchdog.interval.ms**: 看门狗巡检间隔，默认 60000ms。
-- **cdc.wal.warning.threshold-bytes**: WAL 堆积告警阈值，默认 1GB。
-- **async.event.sender.threads**: 发送分片数，增加此值可提升总吞吐，但会增加 CPU 开销。
+配置文件：`src/main/resources/application.yml`
 
----
+重点参数：
 
-## 📄 文档索引
-- 文档总导航：`docs/README.md`
-- 架构设计深挖：`ARCHITECTURE.md`
-- 位移存储优化：`REPLICATION_SLOT_OPTIMIZATION.md`
+- `spring.datasource.*`
+  - 系统库连接（用于 JPA、event_log、offset、schema history 存储）
+- `cdc.watchdog.interval.ms`
+  - 管道看门狗巡检间隔（默认 60s）
+- `cdc.heartbeat.interval.ms`
+  - Debezium 心跳间隔（默认 5000ms）
+- `cdc.heartbeat.action.query`
+  - Debezium 心跳 SQL（默认 `SELECT 1`）
+- `cdc.wal.warning.threshold-bytes`
+  - WAL 告警阈值（默认 1GB）
+- `async.event.*`
+  - 异步发送队列、线程、批量发送、重试参数
+
+## 安全说明
+
+- 数据源密码数据库落库仍由 `AesEncryptor` 负责字段级加密。
+- 新增“前端到后端”链路加密，仅用于传输阶段保护明文密码。
+- 若前端未加密（旧客户端），后端也兼容明文请求。
+
+## 升级说明
+
+若你从旧版本升级，请确认数据库结构：
+
+- `datasource_config` 表中已删除/不再依赖 `offset_key`。
+- 如历史库仍有该列，不影响新版本运行，但建议后续通过 DDL 清理。
+
+## 常用接口
+
+- 数据源配置：`/api/datasource`
+- 管道状态：`/api/pipeline/status`
+- 事件日志：`/api/event-log`
+- 生命周期治理：`/api/lifecycle/status`
+- 密码加密公钥：`/api/security/password-public-key`
+
+## 文档索引
+
+- 架构说明：`ARCHITECTURE.md`
+- 多管道指南：`MULTI_PIPELINE_GUIDE.md`
+- 复制槽优化：`REPLICATION_SLOT_OPTIMIZATION.md`
+- 其他文档：`docs/README.md`
+

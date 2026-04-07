@@ -7,20 +7,27 @@ import io.debezium.engine.DebeziumEngine;
 import io.debezium.engine.format.Json;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
 import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.*;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * 多配置 CDC 管道管理器
- * 为每个数据源配置创建独立的 Debezium 引擎，支持并发处理多个数据源
- */
 @Slf4j
 @Service
 public class MultiConfigCdcPipelineManager {
@@ -28,96 +35,84 @@ public class MultiConfigCdcPipelineManager {
     private final RocketMQProducerService rocketMQProducerService;
     private final DataSourceConfigService configService;
     private final AsyncEventSenderService asyncEventSenderService;
+    private final DataSourceProperties springDataSourceProperties;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // 存储每个配置对应的 CDC 管道
-    private final Map<Long, CdcPipeline> pipelines = new ConcurrentHashMap<>();
+    @Value("${cdc.heartbeat.interval.ms:5000}")
+    private int heartbeatIntervalMs;
 
-    // 追踪最近重试时间，防止由于永久性错误导致的无限重启循环
+    @Value("${cdc.heartbeat.action.query:SELECT 1}")
+    private String heartbeatActionQuery;
+
+    private final Map<Long, CdcPipeline> pipelines = new ConcurrentHashMap<>();
     private final Map<Long, LocalDateTime> lastRestartAttempts = new ConcurrentHashMap<>();
     private static final Duration RESTART_COOLDOWN = Duration.ofMinutes(5);
 
-    // 虚拟线程执行器
     private ExecutorService virtualThreadExecutor;
 
     public MultiConfigCdcPipelineManager(RocketMQProducerService rocketMQProducerService,
                                          DataSourceConfigService configService,
-                                         AsyncEventSenderService asyncEventSenderService) {
+                                         AsyncEventSenderService asyncEventSenderService,
+                                         DataSourceProperties springDataSourceProperties) {
         this.rocketMQProducerService = rocketMQProducerService;
         this.configService = configService;
         this.asyncEventSenderService = asyncEventSenderService;
+        this.springDataSourceProperties = springDataSourceProperties;
     }
 
-    /**
-     * 初始化所有活跃配置的 CDC 管道
-     */
     public void initializeActivePipelines() {
-        log.info("初始化所有活跃的 CDC 管道...");
+        log.info("初始化所有活跃 CDC 管道...");
+        ensureExecutorReady();
 
         try {
-            // 创建虚拟线程执行器（命名便于排障）
-            virtualThreadExecutor = Executors.newThreadPerTaskExecutor(
-                Thread.ofVirtual().name("cdc-vt-", 0).factory()
-            );
-
-            // 获取所有活跃配置
             List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
             log.info("发现 {} 个活跃配置", activeConfigs.size());
-
-            // 为每个活跃配置启动 CDC 管道
             for (DataSourceConfig config : activeConfigs) {
                 startPipeline(config);
             }
-
-            log.info("所有活跃 CDC 管道已初始化");
-
+            log.info("活跃 CDC 管道初始化完成");
         } catch (Exception e) {
             log.error("初始化 CDC 管道失败: {}", e.getMessage(), e);
             throw new RuntimeException("初始化 CDC 管道失败", e);
         }
     }
 
-    /**
-     * 为指定配置启动 CDC 管道
-     */
     public synchronized void startPipeline(DataSourceConfig config) {
-        if (config == null || !config.getIsActive()) {
-            log.warn("配置无效或未激活: {}", config != null ? config.getId() : "null");
+        if (config == null || !Boolean.TRUE.equals(config.getIsActive())) {
+            log.warn("配置无效或未启用: {}", config != null ? config.getId() : null);
             return;
         }
 
-        Long configId = config.getId();
+        ensureExecutorReady();
 
-        // 检查是否已存在
+        Long configId = config.getId();
         if (pipelines.containsKey(configId)) {
             log.warn("配置 {} 的管道已存在，跳过启动", configId);
             return;
         }
 
         try {
-            log.info("启动配置 {} 的 CDC 管道: {}", configId, config.getName());
-
-            // 创建 CDC 管道
-            CdcPipeline pipeline = new CdcPipeline(config, virtualThreadExecutor,
-                                                   rocketMQProducerService, asyncEventSenderService, objectMapper);
-
-            // 启动管道
+            CdcPipeline pipeline = new CdcPipeline(
+                    config,
+                    virtualThreadExecutor,
+                    rocketMQProducerService,
+                    asyncEventSenderService,
+                    objectMapper,
+                    resolveOffsetJdbcUrl(),
+                    resolveOffsetJdbcUser(),
+                    resolveOffsetJdbcPassword(),
+                    heartbeatIntervalMs,
+                    heartbeatActionQuery
+            );
             pipeline.start();
-
-            // 保存到映射
             pipelines.put(configId, pipeline);
-
             log.info("配置 {} 的 CDC 管道已启动", configId);
-
         } catch (Exception e) {
             log.error("启动配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
             throw new RuntimeException("启动 CDC 管道失败", e);
         }
     }
 
-    /**
-     * 停止指定配置的 CDC 管道
-     */
     public synchronized void stopPipeline(Long configId) {
         CdcPipeline pipeline = pipelines.get(configId);
         if (pipeline == null) {
@@ -126,78 +121,81 @@ public class MultiConfigCdcPipelineManager {
         }
 
         try {
-            log.info("停止配置 {} 的 CDC 管道", configId);
             pipeline.stop();
-            pipelines.remove(configId);
-            log.info("配置 {} 的 CDC 管道已停止", configId);
         } catch (Exception e) {
             log.error("停止配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
+        } finally {
+            pipelines.remove(configId);
         }
     }
 
-    /**
-     * 重启指定配置的 CDC 管道
-     */
     public synchronized void restartPipeline(Long configId) {
         stopPipeline(configId);
-
         DataSourceConfig config = configService.getConfigById(configId)
                 .orElseThrow(() -> new RuntimeException("配置不存在: " + configId));
-
         startPipeline(config);
     }
 
-    /**
-     * 获取所有活跃管道的状态
-     */
     public Map<Long, PipelineStatus> getAllPipelineStatus() {
-        Map<Long, PipelineStatus> statusMap = new LinkedHashMap<>();
-
+        Map<Long, PipelineStatus> result = new LinkedHashMap<>();
         for (Map.Entry<Long, CdcPipeline> entry : pipelines.entrySet()) {
-            Long configId = entry.getKey();
-            CdcPipeline pipeline = entry.getValue();
-            statusMap.put(configId, pipeline.getStatus());
+            result.put(entry.getKey(), entry.getValue().getStatus());
         }
-
-        return statusMap;
+        return result;
     }
 
-    /**
-     * 自动监控与自愈任务 (Watchdog)
-     * 每分钟检查一次所有活跃配置，如果发现管道未运行则尝试重启
-     */
     @Scheduled(fixedDelayString = "${cdc.watchdog.interval.ms:60000}")
     public void checkAndRestartPipelines() {
-        log.debug("CDC Watchdog 开始执行巡检...");
-
         try {
             List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
-
             for (DataSourceConfig config : activeConfigs) {
                 Long configId = config.getId();
                 CdcPipeline pipeline = pipelines.get(configId);
-
-                // 情况 1: 应该运行但不在内存映射中
-                // 情况 2: 在内存中但 running 标志位为 false (Debezium 引擎已停止)
                 if (pipeline == null || !pipeline.isRunning()) {
-                    if (isCooldownExpired(configId)) {
-                        log.warn("检测到异常：配置 {} [{}] 应该运行但当前已停止，Watchdog 尝试自动重启...",
-                            configId, config.getName());
-
-                        try {
-                            lastRestartAttempts.put(configId, LocalDateTime.now());
-                            restartPipeline(configId);
-                        } catch (Exception e) {
-                            log.error("Watchdog 尝试重启配置 {} 失败: {}", configId, e.getMessage());
-                        }
-                    } else {
-                        log.debug("配置 {} 处于异常状态，但处于冷却期内，暂不触发自动重启", configId);
+                    if (!isCooldownExpired(configId)) {
+                        continue;
+                    }
+                    try {
+                        lastRestartAttempts.put(configId, LocalDateTime.now());
+                        restartPipeline(configId);
+                        log.warn("Watchdog 触发了配置 {} 的自动重启", configId);
+                    } catch (Exception e) {
+                        log.error("Watchdog 重启配置 {} 失败: {}", configId, e.getMessage());
                     }
                 }
             }
         } catch (Exception e) {
-            log.error("CDC Watchdog 巡检过程中发生错误: {}", e.getMessage());
+            log.error("Watchdog 巡检失败: {}", e.getMessage(), e);
         }
+    }
+
+    public PipelineStatus getPipelineStatus(Long configId) {
+        CdcPipeline pipeline = pipelines.get(configId);
+        return pipeline == null ? null : pipeline.getStatus();
+    }
+
+    public synchronized void shutdownAll() {
+        log.info("关闭所有 CDC 管道...");
+
+        for (Long configId : new ArrayList<>(pipelines.keySet())) {
+            stopPipeline(configId);
+        }
+
+        if (virtualThreadExecutor != null) {
+            virtualThreadExecutor.shutdown();
+            try {
+                if (!virtualThreadExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    virtualThreadExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                virtualThreadExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    public int getActivePipelineCount() {
+        return pipelines.size();
     }
 
     private boolean isCooldownExpired(Long configId) {
@@ -208,59 +206,30 @@ public class MultiConfigCdcPipelineManager {
         return Duration.between(lastAttempt, LocalDateTime.now()).compareTo(RESTART_COOLDOWN) >= 0;
     }
 
-    /**
-     * 获取指定配置的管道状态
-     */
-    public PipelineStatus getPipelineStatus(Long configId) {
-        CdcPipeline pipeline = pipelines.get(configId);
-        if (pipeline == null) {
-            return null;
-        }
-        return pipeline.getStatus();
-    }
-
-    /**
-     * 关闭所有 CDC 管道
-     */
-    public synchronized void shutdownAll() {
-        log.info("关闭所有 CDC 管道...");
-
-        // 停止所有管道
-        for (Long configId : new ArrayList<>(pipelines.keySet())) {
-            try {
-                stopPipeline(configId);
-            } catch (Exception e) {
-                log.error("停止配置 {} 的管道时出错: {}", configId, e.getMessage());
-            }
-        }
-
-        // 关闭虚拟线程执行器
+    private void ensureExecutorReady() {
         if (virtualThreadExecutor != null) {
-            try {
-                virtualThreadExecutor.shutdown();
-                if (!virtualThreadExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                    log.warn("虚拟线程执行器未能在 30 秒内关闭，强制关闭");
-                    virtualThreadExecutor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                log.error("等待虚拟线程执行器关闭时被中断: {}", e.getMessage());
-                Thread.currentThread().interrupt();
-            }
+            return;
         }
-
-        log.info("所有 CDC 管道已关闭");
+        virtualThreadExecutor = Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("cdc-vt-", 0).factory()
+        );
     }
 
-    /**
-     * 获取活跃管道数量
-     */
-    public int getActivePipelineCount() {
-        return pipelines.size();
+    private String resolveOffsetJdbcUrl() {
+        String value = springDataSourceProperties.getUrl();
+        return value == null ? "" : value.trim();
     }
 
-    /**
-     * CDC 管道状态
-     */
+    private String resolveOffsetJdbcUser() {
+        String value = springDataSourceProperties.getUsername();
+        return value == null ? "" : value.trim();
+    }
+
+    private String resolveOffsetJdbcPassword() {
+        String value = springDataSourceProperties.getPassword();
+        return value == null ? "" : value.trim();
+    }
+
     @Data
     public static class PipelineStatus {
         private Long configId;
@@ -278,15 +247,17 @@ public class MultiConfigCdcPipelineManager {
         private LocalDateTime lastProcessedTime;
     }
 
-    /**
-     * 单个 CDC 管道
-     */
     private static class CdcPipeline {
         private final DataSourceConfig config;
         private final ExecutorService executor;
         private final RocketMQProducerService rocketMQProducerService;
         private final AsyncEventSenderService asyncEventSenderService;
         private final ObjectMapper objectMapper;
+        private final String offsetJdbcUrl;
+        private final String offsetJdbcUser;
+        private final String offsetJdbcPassword;
+        private final int heartbeatIntervalMs;
+        private final String heartbeatActionQuery;
 
         private DebeziumEngine<ChangeEvent<String, String>> engine;
         private Future<?> engineFuture;
@@ -297,99 +268,80 @@ public class MultiConfigCdcPipelineManager {
         private volatile String lastError = null;
         private volatile LocalDateTime lastProcessedTime = null;
 
-        public boolean isRunning() {
-            return running;
-        }
-
-        public CdcPipeline(DataSourceConfig config, ExecutorService executor,
-                          RocketMQProducerService rocketMQProducerService,
-                          AsyncEventSenderService asyncEventSenderService,
-                          ObjectMapper objectMapper) {
+        private CdcPipeline(DataSourceConfig config,
+                            ExecutorService executor,
+                            RocketMQProducerService rocketMQProducerService,
+                            AsyncEventSenderService asyncEventSenderService,
+                            ObjectMapper objectMapper,
+                            String offsetJdbcUrl,
+                            String offsetJdbcUser,
+                            String offsetJdbcPassword,
+                            int heartbeatIntervalMs,
+                            String heartbeatActionQuery) {
             this.config = config;
             this.executor = executor;
             this.rocketMQProducerService = rocketMQProducerService;
             this.asyncEventSenderService = asyncEventSenderService;
             this.objectMapper = objectMapper;
+            this.offsetJdbcUrl = offsetJdbcUrl;
+            this.offsetJdbcUser = offsetJdbcUser;
+            this.offsetJdbcPassword = offsetJdbcPassword;
+            this.heartbeatIntervalMs = heartbeatIntervalMs;
+            this.heartbeatActionQuery = heartbeatActionQuery;
         }
 
-        /**
-         * 启动 CDC 管道
-         */
-        public void start() throws Exception {
-            log.info("启动 CDC 管道: 配置ID={}, 名称={}, 数据库={}, 表={}",
-                config.getId(), config.getName(), config.getDbName(), config.getTableName());
+        public boolean isRunning() {
+            return running;
+        }
 
-            // 构建 Debezium 配置
+        public void start() {
             Properties props = buildDebeziumProperties();
 
-            // 创建 Debezium Engine
             engine = DebeziumEngine.create(Json.class)
-                .using(props)
-                .notifying(this::handleChangeEvent)
-                .using((success, message, error) -> {
-                    if (success) {
-                        log.info("配置 {} 的 Debezium 引擎完成: {}", config.getId(), message);
-                        lastError = null;
-                    } else {
-                        log.error("配置 {} 的 Debezium 引擎错误: {}", config.getId(), message, error);
-                        lastError = (error != null ? error.getMessage() : message);
-                    }
-                })
-                .build();
+                    .using(props)
+                    .notifying(this::handleChangeEvent)
+                    .using((success, message, error) -> {
+                        if (success) {
+                            lastError = null;
+                        } else {
+                            lastError = error != null ? error.getMessage() : message;
+                        }
+                    })
+                    .build();
 
-            // 在虚拟线程中异步启动引擎
             engineFuture = executor.submit(() -> {
                 try {
                     running = true;
                     startTime = LocalDateTime.now();
-                    log.info("配置 {} 的 CDC 管道在虚拟线程中启动", config.getId());
                     engine.run();
                 } catch (Exception e) {
+                    lastError = e.getMessage();
                     log.error("配置 {} 的 CDC 管道运行异常: {}", config.getId(), e.getMessage(), e);
-                    running = false;
                 } finally {
-                    log.info("配置 {} 的 CDC 管道已停止", config.getId());
                     running = false;
                 }
             });
-
-            log.info("配置 {} 的 CDC 管道已在虚拟线程中启动", config.getId());
         }
 
-        /**
-         * 停止 CDC 管道
-         */
         public void stop() throws IOException {
-            log.info("停止配置 {} 的 CDC 管道", config.getId());
-
             try {
                 if (engine != null) {
-                    log.info("正在关闭配置 {} 的 Debezium 引擎...", config.getId());
                     engine.close();
-                    
-                    // 等待引擎线程彻底退出，确保最后的 Offset 已刷新到数据库
                     if (engineFuture != null) {
                         try {
                             engineFuture.get(10, TimeUnit.SECONDS);
-                            log.info("配置 {} 的引擎线程已正常退出", config.getId());
-                        } catch (TimeoutException e) {
-                            log.warn("等待配置 {} 的引擎退出超时", config.getId());
+                        } catch (TimeoutException ignored) {
+                            log.warn("等待配置 {} 的引擎线程退出超时", config.getId());
                         }
                     }
                 }
             } catch (Exception e) {
-                log.warn("关闭 Debezium 引擎时出错: {}", e.getMessage());
+                log.warn("关闭配置 {} 的 Debezium 引擎失败: {}", config.getId(), e.getMessage());
+            } finally {
+                running = false;
             }
-
-            running = false;
-            log.info("配置 {} 的 CDC 管道已停止", config.getId());
         }
 
-        /**
-         * 处理变更事件
-         * 将事件加入异步队列，不直接发送到 RocketMQ
-         * 这样可以防止 RocketMQ 连接问题导致 Debezium 引擎停止
-         */
         private void handleChangeEvent(ChangeEvent<String, String> event) {
             try {
                 String value = event.value();
@@ -397,111 +349,96 @@ public class MultiConfigCdcPipelineManager {
                     return;
                 }
 
-                // 提取 LSN
                 String lsn = extractLsn(value);
                 if (lsn != null) {
                     currentLsn = lsn;
                 }
 
-                // 将事件加入异步队列（非阻塞）
                 String topic = config.getRocketmqTopic();
                 String tag = config.getRocketmqTag() != null ? config.getRocketmqTag() : config.getTableName();
                 String messageKey = extractPrimaryKey(value, event.key());
 
                 asyncEventSenderService.enqueueEvent(
-                    topic, tag, messageKey, value, config.getId(),
-                    config.getRocketmqNamesrvAddr(), config.getRocketmqProducerGroup(), lsn
+                        topic,
+                        tag,
+                        messageKey,
+                        value,
+                        config.getId(),
+                        config.getRocketmqNamesrvAddr(),
+                        config.getRocketmqProducerGroup(),
+                        lsn
                 );
 
-                long count = processedEventCount.incrementAndGet();
+                processedEventCount.incrementAndGet();
                 lastProcessedTime = LocalDateTime.now();
-                log.debug("配置 {} 处理变更事件 #{} - LSN: {}", config.getId(), count, lsn);
-
             } catch (Exception e) {
                 log.error("配置 {} 处理变更事件失败: {}", config.getId(), e.getMessage(), e);
             }
         }
 
-        /**
-         * 构建 Debezium 配置
-         */
         private Properties buildDebeziumProperties() {
             Properties props = new Properties();
 
-
-
-            // 基础配置
             props.setProperty("name", "debezium-" + config.getId());
             props.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
+
             props.setProperty("offset.storage", "io.debezium.storage.jdbc.offset.JdbcOffsetBackingStore");
-            props.setProperty("offset.storage.jdbc.url", "jdbc:postgresql://" + config.getDbHostname() + ":" + config.getDbPort() + "/" + config.getDbName());
-            props.setProperty("offset.storage.jdbc.user", config.getDbUser());
-            props.setProperty("offset.storage.jdbc.password", config.getDbPassword());
+            props.setProperty("offset.storage.jdbc.url", offsetJdbcUrl);
+            props.setProperty("offset.storage.jdbc.user", offsetJdbcUser);
+            props.setProperty("offset.storage.jdbc.password", offsetJdbcPassword);
             props.setProperty("offset.storage.jdbc.offset.table.name", "debezium_offset_storage_" + config.getId());
-            props.setProperty("offset.storage.jdbc.offset.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, offset_key TEXT, offset_val TEXT, record_insert_ts TIMESTAMP NOT NULL, record_insert_seq INTEGER NOT NULL, PRIMARY KEY(id))");
+            props.setProperty("offset.storage.jdbc.offset.table.ddl",
+                    "CREATE TABLE %s (id VARCHAR(36) NOT NULL, offset_key TEXT, offset_val TEXT, record_insert_ts TIMESTAMP NOT NULL, record_insert_seq INTEGER NOT NULL, PRIMARY KEY(id))");
             props.setProperty("offset.flush.interval.ms", "2000");
+
             props.setProperty("topic.prefix", "dbserver-" + config.getId());
             props.setProperty("key.converter.schemas.enable", "false");
             props.setProperty("value.converter.schemas.enable", "false");
+            props.setProperty("heartbeat.interval.ms", String.valueOf(Math.max(1000, heartbeatIntervalMs)));
+            props.setProperty("heartbeat.action.query", heartbeatActionQuery);
 
-            // 数据库连接配置
             props.setProperty("database.hostname", config.getDbHostname());
-            props.setProperty("database.port", config.getDbPort().toString());
+            props.setProperty("database.port", String.valueOf(config.getDbPort()));
             props.setProperty("database.user", config.getDbUser());
             props.setProperty("database.password", config.getDbPassword());
             props.setProperty("database.dbname", config.getDbName());
             props.setProperty("database.server.name", "dbserver-" + config.getId());
 
-            // 监听配置
             props.setProperty("schema.include.list", config.getSchemaName());
             props.setProperty("table.include.list", config.getSchemaName() + "." + config.getTableName());
 
-            // PostgreSQL 特定配置（仅保留 Debezium Postgres 官方支持项）
             props.setProperty("plugin.name", "pgoutput");
             props.setProperty("slot.name", "debezium_slot_" + config.getId());
             props.setProperty("publication.name", "debezium_publication_" + config.getId());
-
-            // 允许重用 replication slot，避免 stop 时删除造成全量重放
             props.setProperty("slot.drop.on.stop", "false");
 
-            // Snapshot 配置：有 offset 时自动跳过快照
             props.setProperty("snapshot.mode", "when_needed");
             props.setProperty("snapshot.delay.ms", "5000");
             props.setProperty("snapshot.fetch.size", "2048");
 
-            // Schema History - 同样放到 offsets 目录
             props.setProperty("schema.history.internal", "io.debezium.storage.jdbc.history.JdbcSchemaHistory");
-            props.setProperty("schema.history.internal.jdbc.url", "jdbc:postgresql://" + config.getDbHostname() + ":" + config.getDbPort() + "/" + config.getDbName());
-            props.setProperty("schema.history.internal.jdbc.user", config.getDbUser());
-            props.setProperty("schema.history.internal.jdbc.password", config.getDbPassword());
+            props.setProperty("schema.history.internal.jdbc.url", offsetJdbcUrl);
+            props.setProperty("schema.history.internal.jdbc.user", offsetJdbcUser);
+            props.setProperty("schema.history.internal.jdbc.password", offsetJdbcPassword);
             props.setProperty("schema.history.internal.jdbc.schema.history.table.name", "debezium_database_history_" + config.getId());
-            props.setProperty("schema.history.internal.jdbc.schema.history.table.ddl", "CREATE TABLE %s (id VARCHAR(36) NOT NULL, history_record TEXT, history_record_seq INTEGER, PRIMARY KEY(id))");
+            props.setProperty("schema.history.internal.jdbc.schema.history.table.ddl",
+                    "CREATE TABLE %s (id VARCHAR(36) NOT NULL, history_record TEXT, history_record_seq INTEGER, PRIMARY KEY(id))");
 
-            // 性能优化
             props.setProperty("max.batch.size", "2048");
             props.setProperty("max.queue.size", "8192");
             props.setProperty("poll.interval.ms", "1000");
-
-            // 连接超时优化
             props.setProperty("database.connect.timeout.ms", "30000");
             props.setProperty("database.statement.timeout.ms", "30000");
-
 
             return props;
         }
 
-        /**
-         * 提取 LSN
-         */
         private String extractLsn(String value) {
             try {
                 var jsonNode = objectMapper.readTree(value);
                 var source = jsonNode.get("source");
-                if (source != null) {
-                    var lsn = source.get("lsn");
-                    if (lsn != null) {
-                        return lsn.asText();
-                    }
+                if (source != null && source.get("lsn") != null) {
+                    return source.get("lsn").asText();
                 }
             } catch (Exception e) {
                 log.warn("提取 LSN 失败: {}", e.getMessage());
@@ -509,9 +446,6 @@ public class MultiConfigCdcPipelineManager {
             return null;
         }
 
-        /**
-         * 提取主键
-         */
         private String extractPrimaryKey(String value, String key) {
             try {
                 if (key != null && !key.isEmpty()) {
@@ -531,7 +465,6 @@ public class MultiConfigCdcPipelineManager {
                 if (after != null && after.has("id")) {
                     return after.get("id").asText();
                 }
-
                 var before = jsonNode.get("before");
                 if (before != null && before.has("id")) {
                     return before.get("id").asText();
@@ -542,9 +475,6 @@ public class MultiConfigCdcPipelineManager {
             return "UNKNOWN";
         }
 
-        /**
-         * 获取管道状态
-         */
         public PipelineStatus getStatus() {
             PipelineStatus status = new PipelineStatus();
             status.setConfigId(config.getId());
@@ -564,3 +494,4 @@ public class MultiConfigCdcPipelineManager {
         }
     }
 }
+

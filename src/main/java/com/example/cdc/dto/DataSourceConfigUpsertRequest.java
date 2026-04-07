@@ -16,6 +16,5 @@ public class DataSourceConfigUpsertRequest {
     private String rocketmqTag;
     private String rocketmqNamesrvAddr;
     private String rocketmqProducerGroup;
-    private String offsetKey;
     private Boolean isActive;
 }
