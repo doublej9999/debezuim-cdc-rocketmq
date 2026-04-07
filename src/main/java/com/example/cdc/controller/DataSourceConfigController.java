@@ -63,12 +63,13 @@ public class DataSourceConfigController {
             throw new EntityNotFoundException("配置不存在: " + id);
         }
         DataSourceConfig existing = existingOpt.get();
-        boolean wasActive = Boolean.TRUE.equals(existing.getIsActive());
+        DataSourceConfig beforeUpdate = snapshot(existing);
+        boolean wasActive = Boolean.TRUE.equals(beforeUpdate.getIsActive());
 
         request.setDbPassword(passwordCryptoService.decodeIfEncrypted(request.getDbPassword()));
         DataSourceConfig requestEntity = configMapper.toEntity(request);
         if (request.getIsActive() == null) {
-            requestEntity.setIsActive(existing.getIsActive());
+            requestEntity.setIsActive(beforeUpdate.getIsActive());
         }
         DataSourceConfig updated = configService.updateConfig(id, requestEntity);
 
@@ -81,7 +82,7 @@ public class DataSourceConfigController {
                 log.info("更新配置后停用 CDC 管道: {}", id);
                 pipelineManager.stopPipeline(id);
             }
-        } else if (isActive && hasPipelineSensitiveChanges(existing, updated)) {
+        } else if (isActive && hasPipelineSensitiveChanges(beforeUpdate, updated)) {
             log.info("配置 {} 已生效字段发生变化，重启 CDC 管道使新配置生效", id);
             pipelineManager.restartPipeline(id);
         }
@@ -117,6 +118,29 @@ public class DataSourceConfigController {
         }
 
         return ResponseEntity.ok(configMapper.toResponse(config));
+    }
+
+    private DataSourceConfig snapshot(DataSourceConfig source) {
+        DataSourceConfig copy = new DataSourceConfig();
+        copy.setId(source.getId());
+        copy.setName(source.getName());
+        copy.setDbHostname(source.getDbHostname());
+        copy.setDbPort(source.getDbPort());
+        copy.setDbName(source.getDbName());
+        copy.setDbUser(source.getDbUser());
+        copy.setDbPassword(source.getDbPassword());
+        copy.setSchemaName(source.getSchemaName());
+        copy.setTableName(source.getTableName());
+        copy.setRocketmqTopic(source.getRocketmqTopic());
+        copy.setRocketmqTag(source.getRocketmqTag());
+        copy.setRocketmqNamesrvAddr(source.getRocketmqNamesrvAddr());
+        copy.setRocketmqProducerGroup(source.getRocketmqProducerGroup());
+        copy.setOffsetKey(source.getOffsetKey());
+        copy.setIsActive(source.getIsActive());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        copy.setDeactivatedAt(source.getDeactivatedAt());
+        return copy;
     }
 
     private boolean hasPipelineSensitiveChanges(DataSourceConfig oldConfig, DataSourceConfig newConfig) {
