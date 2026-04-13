@@ -75,6 +75,15 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
     @Query("update EventLog e set e.status = 'FAILED', e.errorMessage = :errorMessage, e.nextRetryAt = null where e.id = :eventId")
     int markAsFailed(@Param("eventId") Long eventId, @Param("errorMessage") String errorMessage);
 
+    /**
+     * 核心逻辑：标记事件为重试状态并更新配置。
+     * 
+     * 当事件发送失败时调用此方法。包含以下核心机制：
+     * 1. 状态跃迁：如果重试次数未达到最大值，状态更新为 RETRY；若已达最大值，则更新为 FAILED，不再自动重试。
+     * 2. 路由更新：更新该事件对应的 MQ 路由信息（topic/tag/namesrvAddr/producerGroup），
+     *    确保如果在重试期间用户修改了配置，能使用最新的配置进行重试。
+     * 3. 并发安全：通过校验 status <> 'SENT' 避免修改已成功发送的记录。
+     */
     @Modifying
     @Query("""
         update EventLog e
@@ -99,6 +108,10 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
                      @Param("namesrvAddr") String namesrvAddr,
                      @Param("producerGroup") String producerGroup);
 
+    /**
+     * 手动重试核心逻辑：重置事件状态。
+     * 将 FAILED 或处于 RETRY 状态的事件强制还原为 PENDING，并清空重试计数器，使得发送服务能够重新处理。
+     */
     @Modifying
     @Query("""
         update EventLog e

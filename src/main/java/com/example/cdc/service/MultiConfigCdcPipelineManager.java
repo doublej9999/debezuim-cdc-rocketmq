@@ -342,12 +342,18 @@ public class MultiConfigCdcPipelineManager {
             }
         }
 
+        /**
+         * 核心逻辑：Debezium 事件消费及过滤
+         * 接收 Debezium 投递的数据库变更事件，完成清洗、过滤并将有效载荷推入异步队列。
+         */
         private void handleChangeEvent(ChangeEvent<String, String> event) {
             try {
-                // 1. 过滤心跳包不推送MQ：通过检查目标topic (destination) 判断是否为心跳包
+                // 1. 心跳过滤机制 (Heartbeat Filtering)
+                // 由于心跳事件主要是为了推进 Debezium 内部的 Offset/LSN 更新，本身没有业务价值的数据载荷，
+                // 所以必须在此核心处显式过滤，防止大量心跳包涌入 RocketMQ 导致浪费。
                 String destination = event.destination();
                 if (destination != null && destination.startsWith("__debezium-heartbeat")) {
-                    log.debug("配置 {} 检测到心跳包，忽略推送: {}", config.getId(), destination);
+                    log.debug("配置 {} 检测到心跳包，系统级别消费后即丢弃，不上抛至业务MQ: {}", config.getId(), destination);
                     return;
                 }
 
@@ -356,18 +362,21 @@ public class MultiConfigCdcPipelineManager {
                     return;
                 }
 
-                // 2. 提取并更新当前处理的最新的 LSN (Log Sequence Number)
+                // 2. 提取并更新当前最新的 LSN (Log Sequence Number)
+                // LSN 提供了变更事件在数据库层级的唯一流水号，对后续幂等消费与日志对账具有关键作用。
                 String lsn = extractLsn(value);
                 if (lsn != null) {
                     currentLsn = lsn;
                 }
 
-                // 3. 准备发送至MQ需要的基本参数
+                // 3. 提取业务维度的路由标识信息
+                // 包含最终推送到 RocketMQ 需要的 Topic、Tag 以及保证消息顺序或去重的业务主键 (MessageKey)。
                 String topic = config.getRocketmqTopic();
                 String tag = config.getRocketmqTag() != null ? config.getRocketmqTag() : config.getTableName();
                 String messageKey = extractPrimaryKey(value, event.key());
 
-                // 4. 将变更事件提交给异步发送服务
+                // 4. 将变更事件提交给异步发送缓冲队列
+                // 不在此处直接调用 MQ 客户端发送，避免网络抖动导致消费线程（Debezium Engine）阻塞。
                 asyncEventSenderService.enqueueEvent(
                         topic,
                         tag,
@@ -379,11 +388,11 @@ public class MultiConfigCdcPipelineManager {
                         lsn
                 );
 
-                // 5. 更新状态统计
+                // 5. 刷新内部健康状态和仪表盘所需指标
                 processedEventCount.incrementAndGet();
                 lastProcessedTime = LocalDateTime.now();
             } catch (Exception e) {
-                log.error("配置 {} 处理变更事件失败: {}", config.getId(), e.getMessage(), e);
+                log.error("配置 {} 核心事件处理异常，可能导致数据丢失或延迟: {}", config.getId(), e.getMessage(), e);
             }
         }
 

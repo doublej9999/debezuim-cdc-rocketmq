@@ -78,23 +78,36 @@ public class EventLogService {
         }
     }
 
+    /**
+     * 核心逻辑：标记事件为重试，并计算退避时间与更新最新路由配置
+     * 此方法主要负责事件失败后的重试策略处理：
+     * 1. 计算延迟时间 (Exponential Backoff)。
+     * 2. 更新最新配置以防用户在失败后立刻修改了数据库配置。
+     */
     @Transactional
     public void markForRetry(Long eventId, String errorMessage) {
         eventLogRepository.findById(eventId).ifPresent(eventLog -> {
+            // 1. 指数退避策略计算重试延迟时间
+            // 第1次：2分钟；第2次：4分钟；第3次：8分钟... 最大封顶30分钟
             int nextRetryCount = eventLog.getRetryCount() + 1;
             long delayMinutes = Math.min(30, 1L << Math.min(nextRetryCount, 5));
             LocalDateTime nextRetryAt = LocalDateTime.now().plusMinutes(delayMinutes);
 
-            // 获取最新配置，如果配置已经删除，则按之前的配置重试
+            // 2. 动态路由更新与降级机制 (Fallback)
+            // 默认使用事件当前记录的配置，防止原配置被删除导致无法发送
             String[] targetFields = new String[]{eventLog.getTopic(), eventLog.getTag(), eventLog.getNamesrvAddr(), eventLog.getProducerGroup()};
+            
+            // 获取最新配置，若能查到，则使用最新配置覆盖，实现真正的“动态感知配置变更”
             dataSourceConfigRepository.findById(eventLog.getConfigId()).ifPresent(config -> {
                 targetFields[0] = config.getRocketmqTopic() != null ? config.getRocketmqTopic() : targetFields[0];
+                // 如果 tag 没配置，默认回退成表名以确保有一定的业务隔离性
                 targetFields[1] = config.getRocketmqTag() != null && !config.getRocketmqTag().isEmpty() 
                         ? config.getRocketmqTag() : config.getTableName();
                 targetFields[2] = config.getRocketmqNamesrvAddr() != null ? config.getRocketmqNamesrvAddr() : targetFields[2];
                 targetFields[3] = config.getRocketmqProducerGroup() != null ? config.getRocketmqProducerGroup() : targetFields[3];
             });
 
+            // 3. 将新的重试数据状态落库
             int updated = eventLogRepository.markForRetry(
                     eventId, errorMessage, nextRetryAt,
                     targetFields[0], targetFields[1], targetFields[2], targetFields[3]
@@ -103,11 +116,12 @@ public class EventLogService {
                 return;
             }
 
+            // 4. 重试状态日志记录，以便于排查问题
             if (nextRetryCount >= eventLog.getMaxRetry()) {
-                log.warn("事件达到最大重试次数，标记失败 - EventId: {}, 重试次数: {}/{}",
+                log.warn("事件达到最大重试次数，最终标记为失败 - EventId: {}, 尝试次数: {}/{}",
                         eventId, nextRetryCount, eventLog.getMaxRetry());
             } else {
-                log.info("事件标记为重试 - EventId: {}, 重试次数: {}/{}, 下次重试: {}",
+                log.info("事件标记为重试(指数退避) - EventId: {}, 当前重试次数: {}/{}, 下次重试时间: {}",
                         eventId, nextRetryCount, eventLog.getMaxRetry(), nextRetryAt);
             }
         });
