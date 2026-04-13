@@ -344,20 +344,30 @@ public class MultiConfigCdcPipelineManager {
 
         private void handleChangeEvent(ChangeEvent<String, String> event) {
             try {
+                // 1. 过滤心跳包不推送MQ：通过检查目标topic (destination) 判断是否为心跳包
+                String destination = event.destination();
+                if (destination != null && destination.startsWith("__debezium-heartbeat")) {
+                    log.debug("配置 {} 检测到心跳包，忽略推送: {}", config.getId(), destination);
+                    return;
+                }
+
                 String value = event.value();
                 if (value == null) {
                     return;
                 }
 
+                // 2. 提取并更新当前处理的最新的 LSN (Log Sequence Number)
                 String lsn = extractLsn(value);
                 if (lsn != null) {
                     currentLsn = lsn;
                 }
 
+                // 3. 准备发送至MQ需要的基本参数
                 String topic = config.getRocketmqTopic();
                 String tag = config.getRocketmqTag() != null ? config.getRocketmqTag() : config.getTableName();
                 String messageKey = extractPrimaryKey(value, event.key());
 
+                // 4. 将变更事件提交给异步发送服务
                 asyncEventSenderService.enqueueEvent(
                         topic,
                         tag,
@@ -369,6 +379,7 @@ public class MultiConfigCdcPipelineManager {
                         lsn
                 );
 
+                // 5. 更新状态统计
                 processedEventCount.incrementAndGet();
                 lastProcessedTime = LocalDateTime.now();
             } catch (Exception e) {

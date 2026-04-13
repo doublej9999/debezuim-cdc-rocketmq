@@ -85,7 +85,20 @@ public class EventLogService {
             long delayMinutes = Math.min(30, 1L << Math.min(nextRetryCount, 5));
             LocalDateTime nextRetryAt = LocalDateTime.now().plusMinutes(delayMinutes);
 
-            int updated = eventLogRepository.markForRetry(eventId, errorMessage, nextRetryAt);
+            // 获取最新配置，如果配置已经删除，则按之前的配置重试
+            String[] targetFields = new String[]{eventLog.getTopic(), eventLog.getTag(), eventLog.getNamesrvAddr(), eventLog.getProducerGroup()};
+            dataSourceConfigRepository.findById(eventLog.getConfigId()).ifPresent(config -> {
+                targetFields[0] = config.getRocketmqTopic() != null ? config.getRocketmqTopic() : targetFields[0];
+                targetFields[1] = config.getRocketmqTag() != null && !config.getRocketmqTag().isEmpty() 
+                        ? config.getRocketmqTag() : config.getTableName();
+                targetFields[2] = config.getRocketmqNamesrvAddr() != null ? config.getRocketmqNamesrvAddr() : targetFields[2];
+                targetFields[3] = config.getRocketmqProducerGroup() != null ? config.getRocketmqProducerGroup() : targetFields[3];
+            });
+
+            int updated = eventLogRepository.markForRetry(
+                    eventId, errorMessage, nextRetryAt,
+                    targetFields[0], targetFields[1], targetFields[2], targetFields[3]
+            );
             if (updated <= 0) {
                 return;
             }

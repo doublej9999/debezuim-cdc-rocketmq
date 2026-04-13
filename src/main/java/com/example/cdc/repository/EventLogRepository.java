@@ -83,13 +83,21 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
                e.retryCount = e.retryCount + 1,
                e.errorMessage = :errorMessage,
                e.nextRetryAt =
-                   CASE WHEN e.retryCount + 1 >= e.maxRetry THEN null ELSE :nextRetryAt END
+                   CASE WHEN e.retryCount + 1 >= e.maxRetry THEN null ELSE :nextRetryAt END,
+               e.topic = :topic,
+               e.tag = :tag,
+               e.namesrvAddr = :namesrvAddr,
+               e.producerGroup = :producerGroup
          where e.id = :eventId
            and e.status <> 'SENT'
         """)
     int markForRetry(@Param("eventId") Long eventId,
                      @Param("errorMessage") String errorMessage,
-                     @Param("nextRetryAt") LocalDateTime nextRetryAt);
+                     @Param("nextRetryAt") LocalDateTime nextRetryAt,
+                     @Param("topic") String topic,
+                     @Param("tag") String tag,
+                     @Param("namesrvAddr") String namesrvAddr,
+                     @Param("producerGroup") String producerGroup);
 
     @Modifying
     @Query("""
