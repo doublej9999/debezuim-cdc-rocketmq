@@ -166,7 +166,7 @@ public class AsyncEventSenderService {
         int routeKey = (message.key != null && !message.key.isBlank())
                 ? message.key.hashCode()
                 : message.configId.hashCode();
-        int queueIndex = Math.abs(routeKey) % senderThreads;
+        int queueIndex = Math.floorMod(routeKey, senderThreads);
         BlockingQueue<ChangeEventMessage> targetQueue = eventQueues.get(queueIndex);
 
         boolean offered = targetQueue.offer(message);
@@ -468,4 +468,3 @@ public class AsyncEventSenderService {
         private final int queueSize;
     }
 }
-

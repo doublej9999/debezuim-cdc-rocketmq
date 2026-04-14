@@ -135,7 +135,6 @@ public class DataSourceConfigController {
         copy.setRocketmqTag(source.getRocketmqTag());
         copy.setRocketmqNamesrvAddr(source.getRocketmqNamesrvAddr());
         copy.setRocketmqProducerGroup(source.getRocketmqProducerGroup());
-        copy.setOffsetKey(source.getOffsetKey());
         copy.setIsActive(source.getIsActive());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
