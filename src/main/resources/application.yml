@@ -73,6 +73,16 @@ event:
   cleanup:
     days: 3  # 保留天数（从 30 天缩短到 3 天以减少表膨胀）
 
+# 全量快照配置
+snapshot:
+  schedule:
+    enabled: true                 # 是否启用定时快照（false 则只允许手动触发）
+    cron: "0 0 3 * * ?"           # 默认每天凌晨 3 点执行，可按需修改
+  topic-suffix: "_ALL"            # 全量快照推送的 Topic 后缀（增量保持原 Topic 不变）
+  batch:
+    size: 500                     # 每批推送行数（同时作为 JDBC fetchSize）
+    pause-ms: 50                  # 批次间暂停毫秒，避免打垮 RocketMQ Broker
+
 # WAL 优化配置
 wal:
   optimization:

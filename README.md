@@ -1,110 +1,141 @@
 # Debezium CDC RocketMQ 2.0
 
-基于 `Java 21`、`Spring Boot 3.4`、`Debezium 3.0`、`RocketMQ 4.9` 的多数据源 CDC 管道管理系统，支持高可靠异步发送、顺序保障、WAL 治理与可视化管理。
+基于 `Java 21`、`Spring Boot 3.4`、`Debezium 3.0`、`RocketMQ 4.9` 的多数据源 CDC 管道管理系统。  
+支持高可靠异步发送、顺序保障、**全量快照推送**、WAL 治理与可视化管理。
+
+---
 
 ## 主要能力
 
-- 多数据源 CDC 管道管理（启动、停止、重启、自动巡检）
-- Debezium 事件异步发送 RocketMQ，支持分片队列与顺序发送
-- 本地事件日志（`event_log`）保障可靠投递与补偿
-- 复制槽（slot）与 publication 生命周期治理
-- WAL 留存监控与告警
-- Web 管理页面（配置管理、管道状态、事件日志、治理面板）
+- **多数据源 CDC 管道管理**：启动、停止、重启、自动 Watchdog 巡检
+- **Debezium 增量事件异步发送**：分片队列 + 顺序发送 + 指数退避重试
+- **本地事件日志（`event_log`）**：可靠投递保障与手动补偿
+- **全量快照定时推送（NEW）**：定时将源库全量数据推送到 `{Topic}_ALL`，下游任意时刻接入均可获取完整数据
+- **复制槽（Slot）与 Publication 生命周期治理**：孤立资源检测与清理
+- **WAL 留存监控与告警**
+- **Web 管理页面**：配置管理、管道状态、事件日志、全量快照监控、治理面板
 
-## 最近更新（2026-04）
-
-本次版本已完成以下关键更新：
-
-1. Debezium 心跳机制
-- 在 Debezium 属性中增加 `heartbeat.interval.ms` 与 `heartbeat.action.query`。
-- 配置项：
-  - `cdc.heartbeat.interval.ms`（默认 `5000`）
-  - `cdc.heartbeat.action.query`（默认 `SELECT 1`）
-
-2. WAL 留存显示优化
-- 生命周期治理状态中，无论配置是启用还是停用，都会尝试查询并展示对应 slot 的 `retainedWalBytes`。
-
-3. 数据源配置字段清理
-- `datasource_config` 移除 `offset_key` 字段（模型/DTO/SQL 初始化脚本同步移除）。
-
-4. Debezium offset/schema-history 落表连接调整
-- `offset.storage.jdbc.*` 与 `schema.history.internal.jdbc.*` 改为直接读取 `spring.datasource`，不再使用业务数据源配置中的库连接信息。
-
-5. 重试状态机修复
-- 重试达到上限后状态会正确落为 `FAILED`（不再一直停留 `RETRY`）。
-- 手动重试支持 `FAILED/RETRY` 事件重置并重新入队。
-
-6. 前端请求密码传输加密
-- 增加密码公钥接口：`GET /api/security/password-public-key`
-- 前端提交数据源配置时对 `dbPassword` 进行 `RSA-OAEP(SHA-256)` 加密，后端解密后入库。
-- 传输密文前缀：`ENC_RSA:`
-
-7. 批量发送生产者组路由修复
-- 批量发送按 `namesrvAddr + producerGroup + topic` 分组，不再固定使用默认生产者组。
-- 缺省时可按 `configId` 回查 `datasource_config` 的 `rocketmqProducerGroup/rocketmqNamesrvAddr`。
+---
 
 ## 快速开始
 
-## 1. 环境要求
+### 环境要求
 
-- JDK 21+
-- PostgreSQL 12+（需启用逻辑复制）
-- RocketMQ 4.9+
+| 依赖 | 版本 |
+|------|------|
+| JDK | 21+ |
+| PostgreSQL | 12+（需启用逻辑复制） |
+| RocketMQ | 4.9+ |
 
-## 2. 启动
+### 启动
 
 ```bash
 mvn clean package
 mvn spring-boot:run
 ```
 
-默认访问地址：
-- 管理页面：`http://localhost:8082`
+**管理页面**：`http://localhost:8082`
 
-## 3. 关键配置
+---
 
-配置文件：`src/main/resources/application.yml`
+## 关键配置（application.yml）
 
-重点参数：
+```yaml
+spring:
+  datasource:              # 系统库（存储 event_log、offset、schema history）
+    url: jdbc:postgresql://localhost:5432/postgres
 
-- `spring.datasource.*`
-  - 系统库连接（用于 JPA、event_log、offset、schema history 存储）
-- `cdc.watchdog.interval.ms`
-  - 管道看门狗巡检间隔（默认 60s）
-- `cdc.heartbeat.interval.ms`
-  - Debezium 心跳间隔（默认 5000ms）
-- `cdc.heartbeat.action.query`
-  - Debezium 心跳 SQL（默认 `SELECT 1`）
-- `cdc.wal.warning.threshold-bytes`
-  - WAL 告警阈值（默认 1GB）
-- `async.event.*`
-  - 异步发送队列、线程、批量发送、重试参数
+rocketmq:
+  namesrv-addr: localhost:9876
+  producer-group: debezium-cdc-producer
+  topic: cdc-events2
+
+cdc:
+  watchdog.interval.ms: 60000      # 管道看门狗巡检间隔
+  heartbeat.interval.ms: 5000      # Debezium 心跳间隔
+
+async:
+  event:
+    queue.size: 10000              # 异步发送队列大小
+    sender.threads: 4              # 发送线程数
+
+# 全量快照配置
+snapshot:
+  schedule:
+    enabled: true
+    cron: "0 0 3 * * ?"            # 每天凌晨 3 点全量快照
+  topic-suffix: "_ALL"
+  batch:
+    size: 500
+    pause-ms: 50
+
+event:
+  cleanup.days: 3                  # event_log 保留天数
+```
+
+---
+
+## 全量快照机制
+
+解决 RocketMQ 消息 48h 过期导致下游晚接入无法消费的问题。
+
+```
+增量 CDC  →  {topic}       （保持不变，实时捕获）
+全量快照  →  {topic}_ALL   （定时全扫，下游全量基线）
+```
+
+**下游首次接入流程：**
+
+1. `GET /api/snapshot/jobs/config/{configId}/latest` → 获取 `snapshotLsn`
+2. 消费 `{topic}_ALL` 直到收到 `X-Snapshot-Status: END`
+3. 从增量 Topic 中跳过 `lsn ≤ snapshotLsn` 的消息，正常消费
+
+详见 [`docs/SNAPSHOT_DESIGN.md`](docs/SNAPSHOT_DESIGN.md)
+
+---
+
+## REST API 概览
+
+| 分类 | 端点示例 |
+|------|---------|
+| 数据源配置 | `GET/POST /api/datasource` |
+| 管道管理 | `GET /api/pipeline/status`，`POST /api/pipeline/{id}/restart` |
+| 异步发送统计 | `GET /api/pipeline/async-stats` |
+| 事件日志 | `GET /api/event-log`，`POST /api/event-log/retry` |
+| **全量快照** | `POST /api/snapshot/trigger/{id}`，`GET /api/snapshot/jobs` |
+| 生命周期治理 | `GET /api/lifecycle/status` |
+| 密码加密公钥 | `GET /api/security/password-public-key` |
+
+---
 
 ## 安全说明
 
-- 数据源密码数据库落库仍由 `AesEncryptor` 负责字段级加密。
-- 新增“前端到后端”链路加密，仅用于传输阶段保护明文密码。
-- 若前端未加密（旧客户端），后端也兼容明文请求。
+- 数据源密码：数据库字段级加密（`AesEncryptor` / AES-256）
+- 前端提交：RSA-OAEP(SHA-256) 传输加密，密文前缀 `ENC_RSA:`
+- 兼容性：旧客户端明文请求可正常工作
 
-## 升级说明
+---
 
-若你从旧版本升级，请确认数据库结构：
+## 最近更新（2026-04）
 
-- `datasource_config` 表中已删除/不再依赖 `offset_key`。
-- 如历史库仍有该列，不影响新版本运行，但建议后续通过 DDL 清理。
+| # | 更新内容 |
+|---|---------|
+| 1 | **全量快照推送**：新增定时快照任务，推送全量数据到 `_ALL` Topic，附带 LSN 锚点 |
+| 2 | **快照监控页面**：前端新增 📸 全量快照标签，支持手动触发、进度查询、接入指南 |
+| 3 | Debezium 心跳过滤：`handleChangeEvent` 显式过滤 `__debezium-heartbeat` 事件 |
+| 4 | 重试状态机修复：达到最大重试次数后状态正确落为 `FAILED` |
+| 5 | 重试配置动态感知：`markForRetry` 优先读取数据库最新配置（Fallback 原配置） |
+| 6 | 前端密码 RSA 加密传输 |
+| 7 | 批量发送按 `namesrvAddr + producerGroup` 分组路由修复 |
 
-## 常用接口
-
-- 数据源配置：`/api/datasource`
-- 管道状态：`/api/pipeline/status`
-- 事件日志：`/api/event-log`
-- 生命周期治理：`/api/lifecycle/status`
-- 密码加密公钥：`/api/security/password-public-key`
+---
 
 ## 文档索引
 
-- 架构说明：`ARCHITECTURE.md`
-- 多管道指南：`MULTI_PIPELINE_GUIDE.md`
-- 复制槽优化：`REPLICATION_SLOT_OPTIMIZATION.md`
-- 其他文档：`docs/README.md`
-
+| 文档 | 说明 |
+|------|------|
+| [`docs/SNAPSHOT_DESIGN.md`](docs/SNAPSHOT_DESIGN.md) | 全量快照方案设计（消息格式、LSN 对齐、消费端接入） |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 整体架构说明 |
+| [`MULTI_PIPELINE_GUIDE.md`](MULTI_PIPELINE_GUIDE.md) | 多管道操作指南 |
+| [`REPLICATION_SLOT_OPTIMIZATION.md`](REPLICATION_SLOT_OPTIMIZATION.md) | 复制槽优化与治理 |
+| [`QUICK_START.md`](QUICK_START.md) | 快速上手 |

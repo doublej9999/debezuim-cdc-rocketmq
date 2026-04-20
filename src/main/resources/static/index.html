@@ -424,6 +424,7 @@
         <button class="tab-button active" data-tab="pipelines" onclick="switchTab('pipelines', this)">📊 CDC 管道监控</button>
         <button class="tab-button" data-tab="configs" onclick="switchTab('configs', this)">⚙️ 配置管理</button>
         <button class="tab-button" data-tab="eventlogs" onclick="switchTab('eventlogs', this)">📋 事件日志</button>
+        <button class="tab-button" data-tab="snapshot" onclick="switchTab('snapshot', this)">📸 全量快照</button>
         <button class="tab-button" data-tab="lifecycle" onclick="switchTab('lifecycle', this)">🛡️ 复制槽治理</button>
     </div>
 
@@ -719,6 +720,122 @@
             </div>
         </div>
     </div>
+</div>
+
+    <!-- 全量快照标签页 -->
+    <div id="snapshot" class="tab-content">
+
+        <!-- 触发面板 -->
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h2 style="margin:0;">📸 全量快照管理</h2>
+                <button class="btn-primary" onclick="loadSnapshotJobs()">🔄 刷新列表</button>
+            </div>
+            <div id="snapshotAlert"></div>
+
+            <!-- 说明 -->
+            <div style="background:#f0f4ff; border-left:4px solid #667eea; padding:12px 16px; border-radius:4px; margin-bottom:20px; font-size:13px; line-height:1.8;">
+                <strong>📌 消息协议说明</strong><br>
+                · 全量快照推送到 <code style="background:#e8ebff;padding:1px 5px;border-radius:3px;">{Topic}<strong>_ALL</strong></code>，增量 CDC 保持原 Topic 不变<br>
+                · 消息 Header <code style="background:#e8ebff;padding:1px 5px;border-radius:3px;">X-Snapshot-Type: FULL</code> / <code style="background:#e8ebff;padding:1px 5px;border-radius:3px;">X-Snapshot-Status: BEGIN | DATA | END</code><br>
+                · 快照消息携带 <code style="background:#e8ebff;padding:1px 5px;border-radius:3px;">X-Snapshot-Lsn</code>，下游消费完 _ALL 后从该 LSN 之后消费增量
+            </div>
+
+            <!-- 手动触发区域 -->
+            <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+                <div style="flex:1; min-width:200px;">
+                    <label style="font-size:13px; font-weight:500; color:#333; display:block; margin-bottom:6px;">选择数据源配置</label>
+                    <select id="snapshotConfigSelect" style="padding:10px; border-radius:4px; border:1px solid #dee2e6; width:100%;">
+                        <option value="">-- 加载中... --</option>
+                    </select>
+                </div>
+                <button class="btn-success" id="snapshotTriggerBtn"
+                        style="padding:10px 24px; white-space:nowrap; font-size:14px;"
+                        onclick="triggerSnapshot()">
+                    🚀 立即触发快照
+                </button>
+            </div>
+        </div>
+
+        <!-- 最近快照统计 -->
+        <div class="card">
+            <h2>📊 快照任务概览</h2>
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px,1fr));">
+                <div class="stat-item">
+                    <div class="stat-label">总任务数</div>
+                    <div class="stat-value" id="snapStatTotal">-</div>
+                </div>
+                <div class="stat-item" style="border-left-color:#28a745;">
+                    <div class="stat-label">成功完成</div>
+                    <div class="stat-value" id="snapStatDone" style="color:#28a745;">-</div>
+                </div>
+                <div class="stat-item" style="border-left-color:#ffc107;">
+                    <div class="stat-label">执行中</div>
+                    <div class="stat-value" id="snapStatRunning" style="color:#e6a200;">-</div>
+                </div>
+                <div class="stat-item" style="border-left-color:#dc3545;">
+                    <div class="stat-label">失败</div>
+                    <div class="stat-value" id="snapStatFailed" style="color:#dc3545;">-</div>
+                </div>
+                <div class="stat-item" style="border-left-color:#17a2b8;">
+                    <div class="stat-label">最新 LSN</div>
+                    <div class="stat-value" id="snapStatLsn" style="font-size:12px; font-family:monospace; color:#17a2b8;">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 任务列表 -->
+        <div class="card">
+            <h2>📋 快照任务历史</h2>
+            <div class="table-container">
+                <table id="snapshotJobTable">
+                    <thead>
+                    <tr>
+                        <th>批次 ID</th>
+                        <th>Topic (_ALL)</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>快照 LSN</th>
+                        <th>开始时间</th>
+                        <th>完成时间</th>
+                        <th>错误信息</th>
+                    </tr>
+                    </thead>
+                    <tbody id="snapshotJobTableBody">
+                    <tr>
+                        <td colspan="8" class="empty-state">加载中...</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="display:flex; justify-content:center; gap:10px; margin-top:15px;">
+                <button class="btn-secondary btn-small" onclick="snapshotPrevPage()" id="snapPrevBtn">上一页</button>
+                <span id="snapPageInfo" style="padding:8px;">第 1 页</span>
+                <button class="btn-secondary btn-small" onclick="snapshotNextPage()" id="snapNextBtn">下一页</button>
+            </div>
+        </div>
+
+        <!-- 消费端接入指南 -->
+        <div class="card">
+            <h2>📖 下游系统接入指南</h2>
+            <div style="font-size:13px; line-height:2; color:#555;">
+                <div style="display:grid; grid-template-columns:auto 1fr; gap:4px 16px; align-items:start;">
+                    <span style="background:#667eea; color:#fff; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; flex-shrink:0;">1</span>
+                    <span>调用 <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;">GET /api/snapshot/jobs/config/{configId}/latest</code> 获取最新成功快照的 <b>batchId</b> 和 <b>snapshotLsn</b></span>
+                    <span style="background:#667eea; color:#fff; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; flex-shrink:0;">2</span>
+                    <span>订阅 <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;">{Topic}_ALL</code>，消费 Header <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;">X-Snapshot-Batch-Id = batchId</code> 的全部消息，直到收到 <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;">X-Snapshot-Status: END</code></span>
+                    <span style="background:#667eea; color:#fff; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; flex-shrink:0;">3</span>
+                    <span>切换到原增量 Topic，跳过 LSN &lt;= snapshotLsn 的消息，之后正常消费</span>
+                    <span style="background:#667eea; color:#fff; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; flex-shrink:0;">4</span>
+                    <span>全量消息的 <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;">op=&quot;r&quot;</code>（read），增量为 <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;">c/u/d</code>（create/update/delete），可据此区分处理</span>
+                </div>
+            </div>
+            <div id="latestSnapshotInfo" style="margin-top:15px; background:#f8fff8; border:1px solid #b8e6b8; border-radius:6px; padding:14px; font-size:13px; display:none;">
+            </div>
+            <button class="btn-primary" style="margin-top:12px; padding:8px 20px;" onclick="loadLatestSnapshotInfo()">🔍 查询最新快照 LSN</button>
+        </div>
+    </div>
+
 </div>
 
 <script>
@@ -1429,6 +1546,172 @@
             showAlert('lifecycleAlert', `❌ 网络错误: ${error.message}`, 'error');
         }
     }
+    // ========== 全量快照相关函数 ==========
+    const SNAPSHOT_API = '/api/snapshot';
+    let snapshotCurrentPage = 0;
+
+    // 切换标签页时加载快照
+    const prevSwitchTabSnapshot = switchTab;
+    switchTab = function (tabName, tabButton) {
+        prevSwitchTabSnapshot.call(this, tabName, tabButton);
+        if (tabName === 'snapshot') {
+            loadSnapshotConfigs();
+            loadSnapshotJobs();
+        }
+    };
+
+    // 加载配置列表到下拉框
+    async function loadSnapshotConfigs() {
+        try {
+            const resp = await fetch(DATASOURCE_API);
+            const configs = await resp.json();
+            const sel = document.getElementById('snapshotConfigSelect');
+            if (!configs || configs.length === 0) {
+                sel.innerHTML = '<option value="">-- 暂无活跃配置 --</option>';
+                return;
+            }
+            sel.innerHTML = configs.map(c =>
+                `<option value="${c.id}">[${c.isActive ? '✅启用' : '⭕停用'}] ${c.name} → ${c.rocketmqTopic}_ALL (${c.schemaName}.${c.tableName})</option>`
+            ).join('');
+        } catch (e) {
+            console.error('加载配置失败', e);
+        }
+    }
+
+    // 手动触发快照
+    async function triggerSnapshot() {
+        const configId = document.getElementById('snapshotConfigSelect').value;
+        if (!configId) {
+            showAlert('snapshotAlert', '❌ 请先选择一个数据源配置', 'error');
+            return;
+        }
+        const btn = document.getElementById('snapshotTriggerBtn');
+        btn.disabled = true;
+        btn.textContent = '⏳ 提交中...';
+        try {
+            const resp = await fetch(`${SNAPSHOT_API}/trigger/${configId}`, {method: 'POST'});
+            const data = await resp.json();
+            if (resp.ok && data.success) {
+                showAlert('snapshotAlert', `✅ 快照任务已提交！BatchId: ${data.batchId}`, 'success');
+                setTimeout(loadSnapshotJobs, 800);
+            } else if (resp.status === 409) {
+                showAlert('snapshotAlert', `⚠️ ${data.error}`, 'error');
+            } else {
+                showAlert('snapshotAlert', `❌ ${data.error || '触发失败'}`, 'error');
+            }
+        } catch (e) {
+            showAlert('snapshotAlert', '❌ 网络错误: ' + e.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即触发快照';
+        }
+    }
+
+    // 加载快照任务列表
+    async function loadSnapshotJobs() {
+        try {
+            const resp = await fetch(`${SNAPSHOT_API}/jobs?page=${snapshotCurrentPage}&size=15`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            renderSnapshotJobs(data);
+            updateSnapshotStats(data);
+        } catch (e) {
+            console.error('加载快照任务失败', e);
+        }
+    }
+
+    function renderSnapshotJobs(data) {
+        const tbody = document.getElementById('snapshotJobTableBody');
+        if (!data.content || data.content.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无快照任务记录</td></tr>';
+            document.getElementById('snapPageInfo').textContent = '第 1 页';
+            return;
+        }
+
+        const statusMap = {
+            PENDING:  {cls: 'background:#e9ecef;color:#555;',   icon: '⏳'},
+            RUNNING:  {cls: 'background:#cce5ff;color:#004085;', icon: '🔄'},
+            DONE:     {cls: 'background:#d4edda;color:#155724;', icon: '✅'},
+            FAILED:   {cls: 'background:#f8d7da;color:#721c24;', icon: '❌'}
+        };
+
+        tbody.innerHTML = data.content.map(job => {
+            const s = statusMap[job.status] || {cls: '', icon: ''};
+            const progress = job.totalRows > 0
+                ? `${job.processedRows.toLocaleString()} / ${job.totalRows.toLocaleString()} (${Math.round(job.processedRows/job.totalRows*100)}%)`
+                : `${(job.processedRows||0).toLocaleString()} 行`;
+            const lsn = job.snapshotLsn
+                ? `<span style="font-family:monospace;font-size:11px;color:#17a2b8;">${job.snapshotLsn}</span>`
+                : '<span style="color:#999;">-</span>';
+            const err = job.errorMessage
+                ? `<span title="${job.errorMessage}" style="color:#dc3545;cursor:pointer;">${job.errorMessage.length>40 ? job.errorMessage.substring(0,40)+'…' : job.errorMessage}</span>`
+                : '<span style="color:#999;">-</span>';
+            return `
+                <tr>
+                    <td><code style="font-size:11px;background:#f0f0f0;padding:2px 5px;border-radius:3px;">${job.batchId}</code></td>
+                    <td style="font-size:12px;">${job.topic || '-'}</td>
+                    <td><span style="padding:2px 8px;border-radius:10px;font-size:12px;${s.cls}">${s.icon} ${job.status}</span></td>
+                    <td style="font-size:12px;">${progress}</td>
+                    <td>${lsn}</td>
+                    <td style="font-size:12px;">${job.startedAt ? formatDateTime(job.startedAt) : '-'}</td>
+                    <td style="font-size:12px;">${job.finishedAt ? formatDateTime(job.finishedAt) : '-'}</td>
+                    <td style="max-width:180px;">${err}</td>
+                </tr>`;
+        }).join('');
+
+        document.getElementById('snapPageInfo').textContent = `第 ${data.number + 1} 页 / 共 ${data.totalPages} 页`;
+        document.getElementById('snapPrevBtn').disabled = data.first;
+        document.getElementById('snapNextBtn').disabled = data.last;
+    }
+
+    function updateSnapshotStats(data) {
+        if (!data.content) return;
+        const all = data.content;
+        document.getElementById('snapStatTotal').textContent = data.totalElements || 0;
+        document.getElementById('snapStatDone').textContent = all.filter(j => j.status === 'DONE').length;
+        document.getElementById('snapStatRunning').textContent = all.filter(j => j.status === 'RUNNING').length;
+        document.getElementById('snapStatFailed').textContent = all.filter(j => j.status === 'FAILED').length;
+        // 最新 LSN
+        const latest = all.find(j => j.status === 'DONE' && j.snapshotLsn);
+        document.getElementById('snapStatLsn').textContent = latest ? latest.snapshotLsn : '-';
+    }
+
+    // 查询最新快照 LSN（供接入指南使用）
+    async function loadLatestSnapshotInfo() {
+        const configId = document.getElementById('snapshotConfigSelect').value;
+        if (!configId) {
+            showAlert('snapshotAlert', '❌ 请先在顶部选择一个配置', 'error');
+            return;
+        }
+        try {
+            const resp = await fetch(`${SNAPSHOT_API}/jobs/config/${configId}/latest`);
+            const data = await resp.json();
+            const box = document.getElementById('latestSnapshotInfo');
+            if (!data.found) {
+                box.style.display = 'block';
+                box.innerHTML = '<span style="color:#888;">该配置尚无成功完成的快照，请先触发一次全量快照。</span>';
+                return;
+            }
+            box.style.display = 'block';
+            box.innerHTML = `
+                <b>✅ 最新快照信息</b><br>
+                BatchId: <code style="background:#e8f5e9;padding:1px 6px;border-radius:3px;">${data.batchId}</code><br>
+                Topic: <code style="background:#e8f5e9;padding:1px 6px;border-radius:3px;">${data.topic}</code><br>
+                Snapshot LSN: <code style="background:#e8f5e9;padding:1px 6px;border-radius:3px;color:#17a2b8;">${data.snapshotLsn}</code><br>
+                完成时间: ${data.finishedAt}<br>
+                共推送行数: ${(data.processedRows||0).toLocaleString()}<br><br>
+                <b>📌 ${data.consumeGuide}</b>
+            `;
+        } catch (e) {
+            showAlert('snapshotAlert', '❌ 查询失败: ' + e.message, 'error');
+        }
+    }
+
+    function snapshotPrevPage() {
+        if (snapshotCurrentPage > 0) { snapshotCurrentPage--; loadSnapshotJobs(); }
+    }
+    function snapshotNextPage() { snapshotCurrentPage++; loadSnapshotJobs(); }
+
 </script>
 </body>
 </html>
