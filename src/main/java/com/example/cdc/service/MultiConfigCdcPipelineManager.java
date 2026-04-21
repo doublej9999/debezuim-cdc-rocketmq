@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -105,10 +106,19 @@ public class MultiConfigCdcPipelineManager {
         }
         try {
             pipeline.stop();
-            pipelines.remove(configId);
         } catch (Exception e) {
+            if (pipeline.isTerminated()) {
+                pipelines.remove(configId);
+                log.warn("Stop pipeline had cleanup error but engine already terminated, configId={}, error={}",
+                        configId, e.getMessage());
+                return;
+            }
             log.warn("Stop pipeline failed, configId={}, error={}", configId, e.getMessage());
             throw new RuntimeException("Failed to stop pipeline cleanly for configId=" + configId, e);
+        }
+
+        if (pipeline.isTerminated()) {
+            pipelines.remove(configId);
         }
     }
 
@@ -307,8 +317,17 @@ public class MultiConfigCdcPipelineManager {
                 if (engineFuture != null) {
                     try {
                         engineFuture.get(10, TimeUnit.SECONDS);
-                    } catch (TimeoutException ignored) {
-                        throw new RuntimeException("Timeout waiting engine to stop, configId=" + config.getId());
+                    } catch (TimeoutException timeoutException) {
+                        log.warn("Graceful stop timed out, trying to interrupt engine thread, configId={}", config.getId());
+                        engineFuture.cancel(true);
+                        try {
+                            engineFuture.get(5, TimeUnit.SECONDS);
+                        } catch (CancellationException ignored) {
+                            // Expected when cancellation succeeds.
+                        } catch (TimeoutException forceTimeoutException) {
+                            throw new RuntimeException("Timeout waiting engine to stop after cancel, configId="
+                                    + config.getId(), forceTimeoutException);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -316,6 +335,10 @@ public class MultiConfigCdcPipelineManager {
                 throw new IOException("Close engine failed, configId=" + config.getId(), e);
             }
             running = false;
+        }
+
+        public boolean isTerminated() {
+            return !running && (engineFuture == null || engineFuture.isDone() || engineFuture.isCancelled());
         }
 
         private void handleChangeEvent(ChangeEvent<String, String> event) {
