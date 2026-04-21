@@ -85,21 +85,24 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
      * 3. 并发安全：通过校验 status <> 'SENT' 避免修改已成功发送的记录。
      */
     @Modifying
-    @Query("""
-        update EventLog e
-           set e.status =
-                   CASE WHEN e.retryCount + 1 >= e.maxRetry THEN 'FAILED' ELSE 'RETRY' END,
-               e.retryCount = e.retryCount + 1,
-               e.errorMessage = :errorMessage,
-               e.nextRetryAt =
-                   CASE WHEN e.retryCount + 1 >= e.maxRetry THEN null ELSE :nextRetryAt END,
-               e.topic = :topic,
-               e.tag = :tag,
-               e.namesrvAddr = :namesrvAddr,
-               e.producerGroup = :producerGroup
+    @Query(value = """
+        update event_log e
+           set status =
+                   CASE WHEN e.retry_count + 1 >= e.max_retry THEN 'FAILED' ELSE 'RETRY' END,
+               retry_count = e.retry_count + 1,
+               error_message = :errorMessage,
+               next_retry_at =
+                   CASE
+                       WHEN e.retry_count + 1 >= e.max_retry THEN null::timestamp
+                       ELSE cast(:nextRetryAt as timestamp)
+                   END,
+               topic = :topic,
+               tag = :tag,
+               namesrv_addr = :namesrvAddr,
+               producer_group = :producerGroup
          where e.id = :eventId
            and e.status <> 'SENT'
-        """)
+        """, nativeQuery = true)
     int markForRetry(@Param("eventId") Long eventId,
                      @Param("errorMessage") String errorMessage,
                      @Param("nextRetryAt") LocalDateTime nextRetryAt,
@@ -123,4 +126,3 @@ public interface EventLogRepository extends JpaRepository<EventLog, Long> {
         """)
     int resetForManualRetry(@Param("eventId") Long eventId);
 }
-
