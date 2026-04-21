@@ -3,12 +3,15 @@ package com.example.cdc.service;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
+import javax.crypto.spec.OAEPParameterSpec;
+import javax.crypto.spec.PSource;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.spec.MGF1ParameterSpec;
 import java.util.Base64;
 
 @Service
@@ -16,6 +19,12 @@ public class PasswordCryptoService {
 
     private static final String TRANSPORT_PREFIX = "ENC_RSA:";
     private static final String RSA_TRANSFORMATION = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
+    private static final OAEPParameterSpec OAEP_SHA256_PARAMS = new OAEPParameterSpec(
+            "SHA-256",
+            "MGF1",
+            MGF1ParameterSpec.SHA256,
+            PSource.PSpecified.DEFAULT
+    );
 
     private final KeyPair keyPair = generateKeyPair();
 
@@ -34,7 +43,8 @@ public class PasswordCryptoService {
 
         try {
             Cipher cipher = Cipher.getInstance(RSA_TRANSFORMATION);
-            cipher.init(Cipher.DECRYPT_MODE, privateKey());
+            // Align with WebCrypto RSA-OAEP(SHA-256): both main digest and MGF1 digest use SHA-256.
+            cipher.init(Cipher.DECRYPT_MODE, privateKey(), OAEP_SHA256_PARAMS);
             byte[] decrypted = cipher.doFinal(Base64.getDecoder().decode(encryptedText));
             return new String(decrypted, StandardCharsets.UTF_8);
         } catch (Exception e) {
@@ -76,4 +86,3 @@ public class PasswordCryptoService {
         }
     }
 }
-

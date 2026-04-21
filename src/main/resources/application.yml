@@ -10,7 +10,7 @@ spring:
   application:
     name: debezium-cdc-rocketmq
   datasource:
-    url: jdbc:postgresql://localhost:5432/postgres?sslmode=disable
+    url: jdbc:postgresql://localhost:5432/postgres
     username: postgres
     password: 123456
     driver-class-name: org.postgresql.Driver
