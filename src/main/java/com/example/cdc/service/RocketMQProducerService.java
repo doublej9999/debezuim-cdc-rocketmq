@@ -31,20 +31,33 @@ public class RocketMQProducerService {
 
     @PostConstruct
     public void init() throws MQClientException {
-        log.info("初始化 RocketMQ 默认生产者...");
         defaultProducer = createAndStartProducer(
                 rocketMQConfig.getNamesrvAddr(),
                 rocketMQConfig.getProducerGroup(),
                 "default-producer"
         );
-        log.info("RocketMQ 默认生产者启动成功 - NameServer: {}, ProducerGroup: {}",
+        log.info("RocketMQ default producer started: namesrv={}, producerGroup={}",
                 rocketMQConfig.getNamesrvAddr(), rocketMQConfig.getProducerGroup());
     }
 
     public void sendMessage(String namesrvAddr, String producerGroup, String topic, String tag, String key, byte[] body) {
+        sendMessage(namesrvAddr, producerGroup, new Message(topic, tag, key, body));
+    }
+
+    public void sendMessage(String namesrvAddr, String producerGroup, String topic, String tag, String key, String body) {
+        sendMessage(namesrvAddr, producerGroup, topic, tag, key, body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public void sendMessage(String topic, String tag, String key, String body) {
+        sendMessage(null, null, topic, tag, key, body);
+    }
+
+    public void sendMessage(String namesrvAddr, String producerGroup, Message message) {
+        String topic = message.getTopic();
+        String tag = message.getTags();
+        String key = message.getKeys();
         try {
             DefaultMQProducer producer = getProducer(namesrvAddr, producerGroup);
-            Message message = new Message(topic, tag, key, body);
 
             SendResult sendResult;
             if (isOrderlyEnabled() && key != null && !key.isBlank()) {
@@ -57,21 +70,13 @@ public class RocketMQProducerService {
                 sendResult = producer.send(message);
             }
 
-            log.debug("消息发送成功 - NameServer: {}, ProducerGroup: {}, Topic: {}, Tag: {}, Key: {}, MsgId: {}, Status: {}",
+            log.debug("Message sent: namesrv={}, producerGroup={}, topic={}, tag={}, key={}, msgId={}, status={}",
                     producer.getNamesrvAddr(), producer.getProducerGroup(), topic, tag, key,
                     sendResult.getMsgId(), sendResult.getSendStatus());
         } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
-            log.error("消息发送失败 - Topic: {}, Tag: {}, Key: {}, Error: {}", topic, tag, key, e.getMessage(), e);
-            throw new RuntimeException("RocketMQ 消息发送失败", e);
+            log.error("Message send failed: topic={}, tag={}, key={}, error={}", topic, tag, key, e.getMessage(), e);
+            throw new RuntimeException("RocketMQ message send failed", e);
         }
-    }
-
-    public void sendMessage(String namesrvAddr, String producerGroup, String topic, String tag, String key, String body) {
-        sendMessage(namesrvAddr, producerGroup, topic, tag, key, body.getBytes(StandardCharsets.UTF_8));
-    }
-
-    public void sendMessage(String topic, String tag, String key, String body) {
-        sendMessage(null, null, topic, tag, key, body);
     }
 
     public void sendBatchMessages(List<Message> messages) {
@@ -85,25 +90,23 @@ public class RocketMQProducerService {
         try {
             DefaultMQProducer producer = getProducer(namesrvAddr, producerGroup);
             SendResult sendResult = producer.send(messages);
-            log.debug("批量消息发送成功 - NameServer: {}, ProducerGroup: {}, Topic: {}, MsgCount: {}, MsgId: {}, Status: {}",
+            log.debug("Batch messages sent: namesrv={}, producerGroup={}, topic={}, count={}, msgId={}, status={}",
                     producer.getNamesrvAddr(), producer.getProducerGroup(), messages.get(0).getTopic(),
                     messages.size(), sendResult.getMsgId(), sendResult.getSendStatus());
         } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
-            log.error("批量消息发送失败 - Topic: {}, MsgCount: {}, Error: {}",
+            log.error("Batch message send failed: topic={}, count={}, error={}",
                     messages.get(0).getTopic(), messages.size(), e.getMessage(), e);
-            throw new RuntimeException("RocketMQ 批量消息发送失败", e);
+            throw new RuntimeException("RocketMQ batch message send failed", e);
         }
     }
 
     @PreDestroy
     public void shutdown() {
-        log.info("关闭 RocketMQ 生产者...");
-
         dynamicProducers.values().forEach(holder -> {
             try {
                 holder.producer.shutdown();
             } catch (Exception e) {
-                log.warn("关闭动态生产者失败 - {}: {}", holder.instanceName, e.getMessage());
+                log.warn("Failed to shutdown dynamic producer {}: {}", holder.instanceName, e.getMessage());
             }
         });
         dynamicProducers.clear();
@@ -112,8 +115,6 @@ public class RocketMQProducerService {
             defaultProducer.shutdown();
             defaultProducer = null;
         }
-
-        log.info("RocketMQ 生产者已关闭");
     }
 
     public boolean isRunning() {
@@ -134,22 +135,23 @@ public class RocketMQProducerService {
             return defaultProducer;
         }
 
-        String key = resolvedNamesrvAddr + "|" + resolvedProducerGroup;
-        ProducerHolder holder = dynamicProducers.get(key);
+        String producerKey = resolvedNamesrvAddr + "|" + resolvedProducerGroup;
+        ProducerHolder holder = dynamicProducers.get(producerKey);
         if (holder != null) {
             return holder.producer;
         }
 
         synchronized (this) {
-            ProducerHolder existing = dynamicProducers.get(key);
+            ProducerHolder existing = dynamicProducers.get(producerKey);
             if (existing != null) {
                 return existing.producer;
             }
 
-            String instanceName = "dynamic-producer-" + Math.abs(key.hashCode());
-            DefaultMQProducer dynamicProducer = createAndStartProducer(resolvedNamesrvAddr, resolvedProducerGroup, instanceName);
-            dynamicProducers.put(key, new ProducerHolder(dynamicProducer, instanceName));
-            log.info("创建动态生产者成功 - NameServer: {}, ProducerGroup: {}, InstanceName: {}",
+            String instanceName = "dynamic-producer-" + Math.abs(producerKey.hashCode());
+            DefaultMQProducer dynamicProducer = createAndStartProducer(
+                    resolvedNamesrvAddr, resolvedProducerGroup, instanceName);
+            dynamicProducers.put(producerKey, new ProducerHolder(dynamicProducer, instanceName));
+            log.info("Dynamic producer created: namesrv={}, producerGroup={}, instanceName={}",
                     resolvedNamesrvAddr, resolvedProducerGroup, instanceName);
             return dynamicProducer;
         }
@@ -179,4 +181,3 @@ public class RocketMQProducerService {
     private record ProducerHolder(DefaultMQProducer producer, String instanceName) {
     }
 }
-

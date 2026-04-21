@@ -1,6 +1,7 @@
 package com.example.cdc.service;
 
 import com.example.cdc.model.DataSourceConfig;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
@@ -32,9 +33,9 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class MultiConfigCdcPipelineManager {
 
-    private final RocketMQProducerService rocketMQProducerService;
     private final DataSourceConfigService configService;
     private final AsyncEventSenderService asyncEventSenderService;
+    private final CdcMessageKeyExtractor messageKeyExtractor;
     private final DataSourceProperties springDataSourceProperties;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -50,80 +51,62 @@ public class MultiConfigCdcPipelineManager {
 
     private ExecutorService virtualThreadExecutor;
 
-    public MultiConfigCdcPipelineManager(RocketMQProducerService rocketMQProducerService,
-                                         DataSourceConfigService configService,
+    public MultiConfigCdcPipelineManager(DataSourceConfigService configService,
                                          AsyncEventSenderService asyncEventSenderService,
+                                         CdcMessageKeyExtractor messageKeyExtractor,
                                          DataSourceProperties springDataSourceProperties) {
-        this.rocketMQProducerService = rocketMQProducerService;
         this.configService = configService;
         this.asyncEventSenderService = asyncEventSenderService;
+        this.messageKeyExtractor = messageKeyExtractor;
         this.springDataSourceProperties = springDataSourceProperties;
     }
 
     public void initializeActivePipelines() {
-        log.info("初始化所有活跃 CDC 管道...");
         ensureExecutorReady();
-
-        try {
-            List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
-            log.info("发现 {} 个活跃配置", activeConfigs.size());
-            for (DataSourceConfig config : activeConfigs) {
-                startPipeline(config);
-            }
-            log.info("活跃 CDC 管道初始化完成");
-        } catch (Exception e) {
-            log.error("初始化 CDC 管道失败: {}", e.getMessage(), e);
-            throw new RuntimeException("初始化 CDC 管道失败", e);
+        List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
+        for (DataSourceConfig config : activeConfigs) {
+            startPipeline(config);
         }
+        log.info("Initialized {} active CDC pipelines", activeConfigs.size());
     }
 
     public synchronized void startPipeline(DataSourceConfig config) {
         if (config == null || !Boolean.TRUE.equals(config.getIsActive())) {
-            log.warn("配置无效或未启用: {}", config != null ? config.getId() : null);
             return;
         }
 
         ensureExecutorReady();
-
         Long configId = config.getId();
         if (pipelines.containsKey(configId)) {
-            log.warn("配置 {} 的管道已存在，跳过启动", configId);
             return;
         }
 
-        try {
-            CdcPipeline pipeline = new CdcPipeline(
-                    config,
-                    virtualThreadExecutor,
-                    rocketMQProducerService,
-                    asyncEventSenderService,
-                    objectMapper,
-                    resolveOffsetJdbcUrl(),
-                    resolveOffsetJdbcUser(),
-                    resolveOffsetJdbcPassword(),
-                    heartbeatIntervalMs,
-                    heartbeatActionQuery
-            );
-            pipeline.start();
-            pipelines.put(configId, pipeline);
-            log.info("配置 {} 的 CDC 管道已启动", configId);
-        } catch (Exception e) {
-            log.error("启动配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
-            throw new RuntimeException("启动 CDC 管道失败", e);
-        }
+        CdcPipeline pipeline = new CdcPipeline(
+                config,
+                virtualThreadExecutor,
+                asyncEventSenderService,
+                messageKeyExtractor,
+                objectMapper,
+                resolveOffsetJdbcUrl(),
+                resolveOffsetJdbcUser(),
+                resolveOffsetJdbcPassword(),
+                heartbeatIntervalMs,
+                heartbeatActionQuery
+        );
+        pipeline.start();
+        pipelines.put(configId, pipeline);
+        log.info("Started CDC pipeline for configId={}", configId);
     }
 
     public synchronized void stopPipeline(Long configId) {
         CdcPipeline pipeline = pipelines.get(configId);
         if (pipeline == null) {
-            log.warn("配置 {} 的管道不存在", configId);
             return;
         }
-
         try {
             pipeline.stop();
         } catch (Exception e) {
-            log.error("停止配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
+            log.warn("Stop pipeline failed, configId={}, error={}", configId, e.getMessage());
         } finally {
             pipelines.remove(configId);
         }
@@ -132,41 +115,16 @@ public class MultiConfigCdcPipelineManager {
     public synchronized void restartPipeline(Long configId) {
         stopPipeline(configId);
         DataSourceConfig config = configService.getConfigById(configId)
-                .orElseThrow(() -> new RuntimeException("配置不存在: " + configId));
+                .orElseThrow(() -> new RuntimeException("Config not found: " + configId));
         startPipeline(config);
     }
 
     public Map<Long, PipelineStatus> getAllPipelineStatus() {
-        Map<Long, PipelineStatus> result = new LinkedHashMap<>();
+        Map<Long, PipelineStatus> statusMap = new LinkedHashMap<>();
         for (Map.Entry<Long, CdcPipeline> entry : pipelines.entrySet()) {
-            result.put(entry.getKey(), entry.getValue().getStatus());
+            statusMap.put(entry.getKey(), entry.getValue().getStatus());
         }
-        return result;
-    }
-
-    @Scheduled(fixedDelayString = "${cdc.watchdog.interval.ms:60000}")
-    public void checkAndRestartPipelines() {
-        try {
-            List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
-            for (DataSourceConfig config : activeConfigs) {
-                Long configId = config.getId();
-                CdcPipeline pipeline = pipelines.get(configId);
-                if (pipeline == null || !pipeline.isRunning()) {
-                    if (!isCooldownExpired(configId)) {
-                        continue;
-                    }
-                    try {
-                        lastRestartAttempts.put(configId, LocalDateTime.now());
-                        restartPipeline(configId);
-                        log.warn("Watchdog 触发了配置 {} 的自动重启", configId);
-                    } catch (Exception e) {
-                        log.error("Watchdog 重启配置 {} 失败: {}", configId, e.getMessage());
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("Watchdog 巡检失败: {}", e.getMessage(), e);
-        }
+        return statusMap;
     }
 
     public PipelineStatus getPipelineStatus(Long configId) {
@@ -174,9 +132,33 @@ public class MultiConfigCdcPipelineManager {
         return pipeline == null ? null : pipeline.getStatus();
     }
 
-    public synchronized void shutdownAll() {
-        log.info("关闭所有 CDC 管道...");
+    public int getActivePipelineCount() {
+        return pipelines.size();
+    }
 
+    @Scheduled(fixedDelayString = "${cdc.watchdog.interval.ms:60000}")
+    public void checkAndRestartPipelines() {
+        List<DataSourceConfig> activeConfigs = configService.getActiveConfigs();
+        for (DataSourceConfig config : activeConfigs) {
+            Long configId = config.getId();
+            CdcPipeline pipeline = pipelines.get(configId);
+            if (pipeline != null && pipeline.isRunning()) {
+                continue;
+            }
+            if (!isCooldownExpired(configId)) {
+                continue;
+            }
+            try {
+                lastRestartAttempts.put(configId, LocalDateTime.now());
+                restartPipeline(configId);
+                log.warn("Watchdog restarted CDC pipeline for configId={}", configId);
+            } catch (Exception e) {
+                log.error("Watchdog restart failed for configId={}, error={}", configId, e.getMessage(), e);
+            }
+        }
+    }
+
+    public synchronized void shutdownAll() {
         for (Long configId : new ArrayList<>(pipelines.keySet())) {
             stopPipeline(configId);
         }
@@ -194,10 +176,6 @@ public class MultiConfigCdcPipelineManager {
         }
     }
 
-    public int getActivePipelineCount() {
-        return pipelines.size();
-    }
-
     private boolean isCooldownExpired(Long configId) {
         LocalDateTime lastAttempt = lastRestartAttempts.get(configId);
         if (lastAttempt == null) {
@@ -207,12 +185,10 @@ public class MultiConfigCdcPipelineManager {
     }
 
     private void ensureExecutorReady() {
-        if (virtualThreadExecutor != null) {
-            return;
+        if (virtualThreadExecutor == null) {
+            virtualThreadExecutor = Executors.newThreadPerTaskExecutor(
+                    Thread.ofVirtual().name("cdc-vt-", 0).factory());
         }
-        virtualThreadExecutor = Executors.newThreadPerTaskExecutor(
-                Thread.ofVirtual().name("cdc-vt-", 0).factory()
-        );
     }
 
     private String resolveOffsetJdbcUrl() {
@@ -250,8 +226,8 @@ public class MultiConfigCdcPipelineManager {
     private static class CdcPipeline {
         private final DataSourceConfig config;
         private final ExecutorService executor;
-        private final RocketMQProducerService rocketMQProducerService;
         private final AsyncEventSenderService asyncEventSenderService;
+        private final CdcMessageKeyExtractor messageKeyExtractor;
         private final ObjectMapper objectMapper;
         private final String offsetJdbcUrl;
         private final String offsetJdbcUser;
@@ -265,13 +241,13 @@ public class MultiConfigCdcPipelineManager {
         private final AtomicLong processedEventCount = new AtomicLong(0);
         private volatile String currentLsn = "N/A";
         private volatile boolean running = false;
-        private volatile String lastError = null;
-        private volatile LocalDateTime lastProcessedTime = null;
+        private volatile String lastError;
+        private volatile LocalDateTime lastProcessedTime;
 
         private CdcPipeline(DataSourceConfig config,
                             ExecutorService executor,
-                            RocketMQProducerService rocketMQProducerService,
                             AsyncEventSenderService asyncEventSenderService,
+                            CdcMessageKeyExtractor messageKeyExtractor,
                             ObjectMapper objectMapper,
                             String offsetJdbcUrl,
                             String offsetJdbcUser,
@@ -280,8 +256,8 @@ public class MultiConfigCdcPipelineManager {
                             String heartbeatActionQuery) {
             this.config = config;
             this.executor = executor;
-            this.rocketMQProducerService = rocketMQProducerService;
             this.asyncEventSenderService = asyncEventSenderService;
+            this.messageKeyExtractor = messageKeyExtractor;
             this.objectMapper = objectMapper;
             this.offsetJdbcUrl = offsetJdbcUrl;
             this.offsetJdbcUser = offsetJdbcUser;
@@ -316,7 +292,7 @@ public class MultiConfigCdcPipelineManager {
                     engine.run();
                 } catch (Exception e) {
                     lastError = e.getMessage();
-                    log.error("配置 {} 的 CDC 管道运行异常: {}", config.getId(), e.getMessage(), e);
+                    log.error("CDC pipeline runtime error, configId={}, error={}", config.getId(), e.getMessage(), e);
                 } finally {
                     running = false;
                 }
@@ -327,33 +303,25 @@ public class MultiConfigCdcPipelineManager {
             try {
                 if (engine != null) {
                     engine.close();
-                    if (engineFuture != null) {
-                        try {
-                            engineFuture.get(10, TimeUnit.SECONDS);
-                        } catch (TimeoutException ignored) {
-                            log.warn("等待配置 {} 的引擎线程退出超时", config.getId());
-                        }
+                }
+                if (engineFuture != null) {
+                    try {
+                        engineFuture.get(10, TimeUnit.SECONDS);
+                    } catch (TimeoutException ignored) {
+                        log.warn("Timeout waiting engine to stop, configId={}", config.getId());
                     }
                 }
             } catch (Exception e) {
-                log.warn("关闭配置 {} 的 Debezium 引擎失败: {}", config.getId(), e.getMessage());
+                log.warn("Close engine failed, configId={}, error={}", config.getId(), e.getMessage());
             } finally {
                 running = false;
             }
         }
 
-        /**
-         * 核心逻辑：Debezium 事件消费及过滤
-         * 接收 Debezium 投递的数据库变更事件，完成清洗、过滤并将有效载荷推入异步队列。
-         */
         private void handleChangeEvent(ChangeEvent<String, String> event) {
             try {
-                // 1. 心跳过滤机制 (Heartbeat Filtering)
-                // 由于心跳事件主要是为了推进 Debezium 内部的 Offset/LSN 更新，本身没有业务价值的数据载荷，
-                // 所以必须在此核心处显式过滤，防止大量心跳包涌入 RocketMQ 导致浪费。
                 String destination = event.destination();
                 if (destination != null && destination.startsWith("__debezium-heartbeat")) {
-                    log.debug("配置 {} 检测到心跳包，系统级别消费后即丢弃，不上抛至业务MQ: {}", config.getId(), destination);
                     return;
                 }
 
@@ -362,21 +330,15 @@ public class MultiConfigCdcPipelineManager {
                     return;
                 }
 
-                // 2. 提取并更新当前最新的 LSN (Log Sequence Number)
-                // LSN 提供了变更事件在数据库层级的唯一流水号，对后续幂等消费与日志对账具有关键作用。
                 String lsn = extractLsn(value);
                 if (lsn != null) {
                     currentLsn = lsn;
                 }
 
-                // 3. 提取业务维度的路由标识信息
-                // 包含最终推送到 RocketMQ 需要的 Topic、Tag 以及保证消息顺序或去重的业务主键 (MessageKey)。
                 String topic = config.getRocketmqTopic();
                 String tag = config.getRocketmqTag() != null ? config.getRocketmqTag() : config.getTableName();
-                String messageKey = extractPrimaryKey(value, event.key());
+                String messageKey = messageKeyExtractor.extractPrimaryKey(value, event.key());
 
-                // 4. 将变更事件提交给异步发送缓冲队列
-                // 不在此处直接调用 MQ 客户端发送，避免网络抖动导致消费线程（Debezium Engine）阻塞。
                 asyncEventSenderService.enqueueEvent(
                         topic,
                         tag,
@@ -388,17 +350,15 @@ public class MultiConfigCdcPipelineManager {
                         lsn
                 );
 
-                // 5. 刷新内部健康状态和仪表盘所需指标
                 processedEventCount.incrementAndGet();
                 lastProcessedTime = LocalDateTime.now();
             } catch (Exception e) {
-                log.error("配置 {} 核心事件处理异常，可能导致数据丢失或延迟: {}", config.getId(), e.getMessage(), e);
+                log.error("Handle change event failed, configId={}, error={}", config.getId(), e.getMessage(), e);
             }
         }
 
         private Properties buildDebeziumProperties() {
             Properties props = new Properties();
-
             props.setProperty("name", "debezium-" + config.getId());
             props.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
 
@@ -449,50 +409,20 @@ public class MultiConfigCdcPipelineManager {
             props.setProperty("poll.interval.ms", "1000");
             props.setProperty("database.connect.timeout.ms", "30000");
             props.setProperty("database.statement.timeout.ms", "30000");
-
             return props;
         }
 
         private String extractLsn(String value) {
             try {
-                var jsonNode = objectMapper.readTree(value);
-                var source = jsonNode.get("source");
+                JsonNode jsonNode = objectMapper.readTree(value);
+                JsonNode source = jsonNode.get("source");
                 if (source != null && source.get("lsn") != null) {
                     return source.get("lsn").asText();
                 }
             } catch (Exception e) {
-                log.warn("提取 LSN 失败: {}", e.getMessage());
+                log.warn("Extract LSN failed: {}", e.getMessage());
             }
             return null;
-        }
-
-        private String extractPrimaryKey(String value, String key) {
-            try {
-                if (key != null && !key.isEmpty()) {
-                    var keyNode = objectMapper.readTree(key);
-                    if (keyNode.isObject()) {
-                        var fields = keyNode.fields();
-                        if (fields.hasNext()) {
-                            return fields.next().getValue().asText();
-                        }
-                    } else {
-                        return keyNode.asText();
-                    }
-                }
-
-                var jsonNode = objectMapper.readTree(value);
-                var after = jsonNode.get("after");
-                if (after != null && after.has("id")) {
-                    return after.get("id").asText();
-                }
-                var before = jsonNode.get("before");
-                if (before != null && before.has("id")) {
-                    return before.get("id").asText();
-                }
-            } catch (Exception e) {
-                log.warn("提取主键失败: {}", e.getMessage());
-            }
-            return "UNKNOWN";
         }
 
         public PipelineStatus getStatus() {
@@ -514,4 +444,3 @@ public class MultiConfigCdcPipelineManager {
         }
     }
 }
-
