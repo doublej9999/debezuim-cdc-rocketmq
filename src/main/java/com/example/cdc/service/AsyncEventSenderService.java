@@ -63,6 +63,7 @@ public class AsyncEventSenderService {
     private List<BlockingQueue<ChangeEventMessage>> eventQueues;
     private ExecutorService senderExecutor;
     private volatile boolean running = false;
+    private volatile boolean started = false;
     private final AtomicLong totalEnqueued = new AtomicLong(0);
     private final AtomicInteger threadCounter = new AtomicInteger(0);
     private final AtomicLong totalSent = new AtomicLong(0);
@@ -105,6 +106,14 @@ public class AsyncEventSenderService {
                     .register(meterRegistry);
         }
 
+        log.info("Async event sender initialized and waiting for application-ready start");
+    }
+
+    public synchronized void start() {
+        if (started) {
+            return;
+        }
+
         senderExecutor = Executors.newFixedThreadPool(senderThreads, r -> {
             Thread t = new Thread(r, "async-event-sender-" + threadCounter.incrementAndGet());
             t.setDaemon(false);
@@ -112,13 +121,14 @@ public class AsyncEventSenderService {
         });
 
         running = true;
+        started = true;
         for (int i = 0; i < senderThreads; i++) {
             final int queueIndex = i;
             senderExecutor.submit(() -> processQueue(queueIndex));
         }
 
         reloadPendingEvents();
-        log.info("异步事件发送服务已启动");
+        log.info("Async event sender started");
     }
 
     public void enqueueEvent(String topic, String tag, String key, String body, Long configId,
@@ -327,7 +337,7 @@ public class AsyncEventSenderService {
             for (int i = 0; i < eventQueues.size(); i++) {
                 BlockingQueue<ChangeEventMessage> queue = eventQueues.get(i);
                 if (!queue.isEmpty()) {
-                    log.info("分片 {} 仍有 {} 条消息，尝试发送剩余消息", i, queue.size());
+                    log.info("Shard {} still has {} messages, trying to flush remaining messages", i, queue.size());
                     ChangeEventMessage message;
                     while ((message = queue.poll()) != null) {
                         sendSingleMessage(message);
@@ -391,6 +401,16 @@ public class AsyncEventSenderService {
     }
 
     public Statistics getStatistics() {
+        if (eventQueues == null) {
+            return new Statistics(
+                    totalEnqueued.get(),
+                    totalSent.get(),
+                    totalFailed.get(),
+                    0,
+                    running,
+                    List.of()
+            );
+        }
         int totalQueued = eventQueues.stream().mapToInt(BlockingQueue::size).sum();
         List<ShardStatistics> shardStats = new ArrayList<>();
         for (int i = 0; i < eventQueues.size(); i++) {
