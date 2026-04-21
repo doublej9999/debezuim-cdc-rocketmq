@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,6 +38,7 @@ public interface SnapshotJobRepository extends JpaRepository<SnapshotJob, Long> 
      * 更新已推送行数（用于进度上报）
      */
     @Modifying
+    @Transactional
     @Query("update SnapshotJob j set j.processedRows = :processedRows where j.id = :id")
     int updateProcessedRows(@Param("id") Long id, @Param("processedRows") Long processedRows);
 
@@ -44,6 +46,7 @@ public interface SnapshotJobRepository extends JpaRepository<SnapshotJob, Long> 
      * 标记任务为完成状态
      */
     @Modifying
+    @Transactional
     @Query("""
         update SnapshotJob j
            set j.status = 'DONE',
@@ -59,6 +62,7 @@ public interface SnapshotJobRepository extends JpaRepository<SnapshotJob, Long> 
      * 标记任务为失败状态
      */
     @Modifying
+    @Transactional
     @Query("""
         update SnapshotJob j
            set j.status = 'FAILED',
@@ -75,6 +79,7 @@ public interface SnapshotJobRepository extends JpaRepository<SnapshotJob, Long> 
      */
     @Query("delete from SnapshotJob j where j.createdAt < :before and j.status in ('DONE', 'FAILED')")
     @Modifying
+    @Transactional
     int deleteOldJobs(@Param("before") LocalDateTime before);
 
     /**

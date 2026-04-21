@@ -105,10 +105,10 @@ public class MultiConfigCdcPipelineManager {
         }
         try {
             pipeline.stop();
+            pipelines.remove(configId);
         } catch (Exception e) {
             log.warn("Stop pipeline failed, configId={}, error={}", configId, e.getMessage());
-        } finally {
-            pipelines.remove(configId);
+            throw new RuntimeException("Failed to stop pipeline cleanly for configId=" + configId, e);
         }
     }
 
@@ -308,14 +308,14 @@ public class MultiConfigCdcPipelineManager {
                     try {
                         engineFuture.get(10, TimeUnit.SECONDS);
                     } catch (TimeoutException ignored) {
-                        log.warn("Timeout waiting engine to stop, configId={}", config.getId());
+                        throw new RuntimeException("Timeout waiting engine to stop, configId=" + config.getId());
                     }
                 }
             } catch (Exception e) {
-                log.warn("Close engine failed, configId={}, error={}", config.getId(), e.getMessage());
-            } finally {
                 running = false;
+                throw new IOException("Close engine failed, configId=" + config.getId(), e);
             }
+            running = false;
         }
 
         private void handleChangeEvent(ChangeEvent<String, String> event) {

@@ -18,6 +18,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
@@ -32,6 +33,7 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
@@ -43,6 +45,7 @@ public class SnapshotTask {
     private final RocketMQProducerService rocketMQProducerService;
     private final CdcMessageKeyExtractor messageKeyExtractor;
     private final DataSourceProperties dataSourceProperties;
+    private final TransactionTemplate transactionTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${snapshot.topic-suffix:_ALL}")
@@ -136,10 +139,9 @@ public class SnapshotTask {
                 : config.getTableName();
 
         try {
-            SnapshotJob runningJob = snapshotJobRepository.findById(jobId).orElseThrow();
-            runningJob.setStatus(SnapshotJob.JobStatus.RUNNING);
-            runningJob.setStartedAt(LocalDateTime.now());
-            snapshotJobRepository.save(runningJob);
+            updateJobAsRunning(jobId);
+
+            clearSnapshotConnectorState(config.getId());
 
             String fallbackLsn = null;
             long totalRows = 0L;
@@ -148,26 +150,46 @@ public class SnapshotTask {
                 totalRows = countRows(conn, config.getSchemaName(), config.getTableName());
             }
 
-            runningJob = snapshotJobRepository.findById(jobId).orElseThrow();
-            runningJob.setSnapshotLsn(fallbackLsn);
-            runningJob.setTotalRows(totalRows);
-            snapshotJobRepository.save(runningJob);
+            updateJobSnapshotMeta(jobId, fallbackLsn, totalRows);
 
             sendMarkerMessage(config, topic, tag, batchId, fallbackLsn, "BEGIN", totalRows, 0L);
 
             AtomicLong processed = new AtomicLong(0);
             AtomicReferenceWithString snapshotLsnRef = new AtomicReferenceWithString(fallbackLsn);
+            AtomicBoolean completionHandled = new AtomicBoolean(false);
+            final long totalRowsForCallback = totalRows;
+            AtomicReference<DebeziumEngine<ChangeEvent<String, String>>> engineRef = new AtomicReference<>();
 
             DebeziumEngine<ChangeEvent<String, String>> engine = DebeziumEngine.create(Json.class)
                     .using(buildSnapshotDebeziumProperties(config, batchId))
-                    .notifying(event -> handleSnapshotEvent(event, config, topic, tag, batchId, jobId, processed, snapshotLsnRef))
+                    .notifying(event -> handleSnapshotEvent(
+                            event, config, topic, tag, batchId, jobId, processed, snapshotLsnRef,
+                            completionHandled, totalRowsForCallback, engineRef))
                     .using((success, message, error) -> {
-                        if (!success) {
+                        if (!completionHandled.compareAndSet(false, true)) {
+                            return;
+                        }
+                        long processedRows = processed.get();
+                        String snapshotLsn = snapshotLsnRef.value();
+                        if (success) {
+                            updateJobAsDone(jobId, snapshotLsn, processedRows);
+                            try {
+                                sendMarkerMessage(config, topic, tag, batchId, snapshotLsn, "END", totalRowsForCallback, processedRows);
+                            } catch (Exception markerError) {
+                                log.error("Failed to send END marker in completion callback, configId={}, batchId={}, error={}",
+                                        config.getId(), batchId, markerError.getMessage(), markerError);
+                            }
+                            log.info("Snapshot completion callback persisted DONE, configId={}, batchId={}, rows={}, snapshotLsn={}",
+                                    config.getId(), batchId, processedRows, snapshotLsn);
+                        } else {
+                            String callbackError = (error != null ? error.getMessage() : message);
                             log.warn("Snapshot Debezium callback indicates failure, batchId={}, message={}, error={}",
-                                    batchId, message, error != null ? error.getMessage() : "N/A");
+                                    batchId, message, callbackError != null ? callbackError : "N/A");
+                            updateJobAsFailed(jobId, truncateError(callbackError), config.getId(), batchId);
                         }
                     })
                     .build();
+            engineRef.set(engine);
 
             try (engine) {
                 engine.run();
@@ -176,17 +198,17 @@ public class SnapshotTask {
             long processedRows = processed.get();
             String snapshotLsn = snapshotLsnRef.value();
 
-            SnapshotJob finished = snapshotJobRepository.findById(jobId).orElseThrow();
-            finished.setSnapshotLsn(snapshotLsn);
-            finished.setProcessedRows(processedRows);
-            snapshotJobRepository.save(finished);
-
-            sendMarkerMessage(config, topic, tag, batchId, snapshotLsn, "END", totalRows, processedRows);
-            snapshotJobRepository.markAsDone(jobId, processedRows, LocalDateTime.now());
-            log.info("Snapshot completed, configId={}, batchId={}, rows={}, snapshotLsn={}",
-                    config.getId(), batchId, processedRows, snapshotLsn);
+            if (completionHandled.compareAndSet(false, true)) {
+                updateJobAsDone(jobId, snapshotLsn, processedRows);
+                sendMarkerMessage(config, topic, tag, batchId, snapshotLsn, "END", totalRows, processedRows);
+                log.info("Snapshot completed after engine.run return, configId={}, batchId={}, rows={}, snapshotLsn={}",
+                        config.getId(), batchId, processedRows, snapshotLsn);
+            } else {
+                log.info("Snapshot completion already handled in callback, configId={}, batchId={}",
+                        config.getId(), batchId);
+            }
         } catch (Exception e) {
-            snapshotJobRepository.markAsFailed(jobId, truncateError(e.getMessage()), LocalDateTime.now());
+            updateJobAsFailed(jobId, truncateError(e.getMessage()), config.getId(), batchId);
             log.error("Snapshot failed, configId={}, batchId={}, error={}", config.getId(), batchId, e.getMessage(), e);
         }
     }
@@ -198,7 +220,10 @@ public class SnapshotTask {
                                      String batchId,
                                      Long jobId,
                                      AtomicLong processed,
-                                     AtomicReferenceWithString snapshotLsnRef) {
+                                     AtomicReferenceWithString snapshotLsnRef,
+                                     AtomicBoolean completionHandled,
+                                     long totalRows,
+                                     AtomicReference<DebeziumEngine<ChangeEvent<String, String>>> engineRef) {
         String value = event.value();
         if (value == null || value.isBlank()) {
             return;
@@ -222,10 +247,40 @@ public class SnapshotTask {
         long current = processed.incrementAndGet();
         if (current % 500 == 0) {
             try {
-                snapshotJobRepository.updateProcessedRows(jobId, current);
+                transactionTemplate.executeWithoutResult(status ->
+                        snapshotJobRepository.updateProcessedRows(jobId, current));
             } catch (Exception e) {
                 log.warn("Snapshot progress update failed, batchId={}, rows={}, error={}",
                         batchId, current, e.getMessage());
+            }
+        }
+
+        String snapshotState = extractSnapshotState(value);
+        if ("last".equalsIgnoreCase(snapshotState)) {
+            if (completionHandled.compareAndSet(false, true)) {
+                long processedRows = processed.get();
+                String snapshotLsn = snapshotLsnRef.value();
+                updateJobAsDone(jobId, snapshotLsn, processedRows);
+                try {
+                    sendMarkerMessage(config, topic, tag, batchId, snapshotLsn, "END", totalRows, processedRows);
+                } catch (Exception markerError) {
+                    log.error("Failed to send END marker after last snapshot event, configId={}, batchId={}, error={}",
+                            config.getId(), batchId, markerError.getMessage(), markerError);
+                }
+                log.info("Snapshot completion detected from last snapshot event, configId={}, batchId={}, rows={}, snapshotLsn={}",
+                        config.getId(), batchId, processedRows, snapshotLsn);
+            }
+
+            DebeziumEngine<ChangeEvent<String, String>> currentEngine = engineRef.get();
+            if (currentEngine != null) {
+                Thread.ofVirtual().name("snapshot-stop-" + batchId).start(() -> {
+                    try {
+                        currentEngine.close();
+                    } catch (Exception closeError) {
+                        log.warn("Failed to close snapshot engine after last event, configId={}, batchId={}, error={}",
+                                config.getId(), batchId, closeError.getMessage());
+                    }
+                });
             }
         }
     }
@@ -356,6 +411,26 @@ public class SnapshotTask {
         return null;
     }
 
+    private String extractSnapshotState(String value) {
+        try {
+            JsonNode node = objectMapper.readTree(value);
+            JsonNode source = node.get("source");
+            if (source != null && source.get("snapshot") != null && !source.get("snapshot").isNull()) {
+                return source.get("snapshot").asText();
+            }
+            JsonNode payload = node.get("payload");
+            if (payload != null) {
+                JsonNode payloadSource = payload.get("source");
+                if (payloadSource != null && payloadSource.get("snapshot") != null && !payloadSource.get("snapshot").isNull()) {
+                    return payloadSource.get("snapshot").asText();
+                }
+            }
+        } catch (Exception ignored) {
+            // ignore
+        }
+        return null;
+    }
+
     private String readCurrentLsn(Connection conn) {
         try (PreparedStatement ps = conn.prepareStatement("SELECT pg_current_wal_lsn()::text");
              ResultSet rs = ps.executeQuery()) {
@@ -408,6 +483,87 @@ public class SnapshotTask {
     private String resolveOffsetJdbcPassword() {
         String value = dataSourceProperties.getPassword();
         return value == null ? "" : value.trim();
+    }
+
+    private void clearSnapshotConnectorState(Long configId) {
+        String offsetTable = "debezium_snapshot_offset_" + configId;
+        String historyTable = "debezium_snapshot_history_" + configId;
+        String jdbcUrl = resolveOffsetJdbcUrl();
+        String jdbcUser = resolveOffsetJdbcUser();
+        String jdbcPassword = resolveOffsetJdbcPassword();
+
+        if (jdbcUrl.isBlank()) {
+            log.warn("Skip snapshot state cleanup because offset JDBC URL is blank, configId={}", configId);
+            return;
+        }
+
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPassword)) {
+            truncateTableIfExists(conn, offsetTable, configId);
+            truncateTableIfExists(conn, historyTable, configId);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to cleanup snapshot connector state for config " + configId, e);
+        }
+    }
+
+    private void truncateTableIfExists(Connection conn, String tableName, Long configId) {
+        String sql = "TRUNCATE TABLE " + tableName;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.executeUpdate();
+            log.info("Cleared snapshot connector table: {}, configId={}", tableName, configId);
+        } catch (Exception e) {
+            log.debug("Skip clearing table {} for configId={} because it may not exist yet: {}",
+                    tableName, configId, e.getMessage());
+        }
+    }
+
+    private void updateJobAsRunning(Long jobId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            SnapshotJob runningJob = snapshotJobRepository.findById(jobId).orElseThrow();
+            runningJob.setStatus(SnapshotJob.JobStatus.RUNNING);
+            runningJob.setStartedAt(LocalDateTime.now());
+            snapshotJobRepository.saveAndFlush(runningJob);
+            log.info("Snapshot job status persisted: jobId={}, status=RUNNING", jobId);
+        });
+    }
+
+    private void updateJobSnapshotMeta(Long jobId, String snapshotLsn, long totalRows) {
+        transactionTemplate.executeWithoutResult(status -> {
+            SnapshotJob runningJob = snapshotJobRepository.findById(jobId).orElseThrow();
+            runningJob.setSnapshotLsn(snapshotLsn);
+            runningJob.setTotalRows(totalRows);
+            snapshotJobRepository.saveAndFlush(runningJob);
+        });
+    }
+
+    private void updateJobAsDone(Long jobId, String snapshotLsn, long processedRows) {
+        transactionTemplate.executeWithoutResult(status -> {
+            SnapshotJob finished = snapshotJobRepository.findById(jobId).orElseThrow();
+            finished.setSnapshotLsn(snapshotLsn);
+            finished.setProcessedRows(processedRows);
+            finished.setStatus(SnapshotJob.JobStatus.DONE);
+            finished.setFinishedAt(LocalDateTime.now());
+            finished.setErrorMessage(null);
+            snapshotJobRepository.saveAndFlush(finished);
+            log.info("Snapshot job status persisted: jobId={}, status=DONE, processedRows={}", jobId, processedRows);
+        });
+    }
+
+    private void updateJobAsFailed(Long jobId, String errorMessage, Long configId, String batchId) {
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                SnapshotJob failed = snapshotJobRepository.findById(jobId).orElse(null);
+                if (failed != null) {
+                    failed.setStatus(SnapshotJob.JobStatus.FAILED);
+                    failed.setFinishedAt(LocalDateTime.now());
+                    failed.setErrorMessage(errorMessage);
+                    snapshotJobRepository.saveAndFlush(failed);
+                    log.info("Snapshot job status persisted: jobId={}, status=FAILED", jobId);
+                }
+            });
+        } catch (Exception statusError) {
+            log.error("Failed to persist snapshot FAILED status, configId={}, batchId={}, error={}",
+                    configId, batchId, statusError.getMessage(), statusError);
+        }
     }
 
     private String truncateError(String message) {

@@ -1547,6 +1547,7 @@
     // ========== 全量快照相关函数 ==========
     const SNAPSHOT_API = '/api/snapshot';
     let snapshotCurrentPage = 0;
+    let snapshotPollTimer = null;
 
     // 切换标签页时加载快照
     const prevSwitchTabSnapshot = switchTab;
@@ -1555,8 +1556,28 @@
         if (tabName === 'snapshot') {
             loadSnapshotConfigs();
             loadSnapshotJobs();
+            startSnapshotPolling();
+        } else {
+            stopSnapshotPolling();
         }
     };
+
+    function startSnapshotPolling() {
+        stopSnapshotPolling();
+        snapshotPollTimer = setInterval(() => {
+            const snapshotTab = document.getElementById('snapshot');
+            if (snapshotTab && snapshotTab.classList.contains('active')) {
+                loadSnapshotJobs();
+            }
+        }, 5000);
+    }
+
+    function stopSnapshotPolling() {
+        if (snapshotPollTimer) {
+            clearInterval(snapshotPollTimer);
+            snapshotPollTimer = null;
+        }
+    }
 
     // 加载配置列表到下拉框
     async function loadSnapshotConfigs() {
@@ -1592,6 +1613,7 @@
             if (resp.ok && data.success) {
                 showAlert('snapshotAlert', `✅ 快照任务已提交！BatchId: ${data.batchId}`, 'success');
                 setTimeout(loadSnapshotJobs, 800);
+                startSnapshotPolling();
             } else if (resp.status === 409) {
                 showAlert('snapshotAlert', `⚠️ ${data.error}`, 'error');
             } else {
@@ -1608,11 +1630,16 @@
     // 加载快照任务列表
     async function loadSnapshotJobs() {
         try {
-            const resp = await fetch(`${SNAPSHOT_API}/jobs?page=${snapshotCurrentPage}&size=15`);
+            const resp = await fetch(`${SNAPSHOT_API}/jobs?page=${snapshotCurrentPage}&size=15&_ts=${Date.now()}`, {
+                cache: 'no-store'
+            });
             if (!resp.ok) return;
             const data = await resp.json();
             renderSnapshotJobs(data);
-            updateSnapshotStats(data);
+            const hasRunning = updateSnapshotStats(data);
+            if (!hasRunning) {
+                stopSnapshotPolling();
+            }
         } catch (e) {
             console.error('加载快照任务失败', e);
         }
@@ -1667,11 +1694,13 @@
         const all = data.content;
         document.getElementById('snapStatTotal').textContent = data.totalElements || 0;
         document.getElementById('snapStatDone').textContent = all.filter(j => j.status === 'DONE').length;
-        document.getElementById('snapStatRunning').textContent = all.filter(j => j.status === 'RUNNING').length;
+        const runningCount = all.filter(j => j.status === 'RUNNING').length;
+        document.getElementById('snapStatRunning').textContent = runningCount;
         document.getElementById('snapStatFailed').textContent = all.filter(j => j.status === 'FAILED').length;
         // 最新 LSN
         const latest = all.find(j => j.status === 'DONE' && j.snapshotLsn);
         document.getElementById('snapStatLsn').textContent = latest ? latest.snapshotLsn : '-';
+        return runningCount > 0;
     }
 
     // 查询最新快照 LSN（供接入指南使用）
