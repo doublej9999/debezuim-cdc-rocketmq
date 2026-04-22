@@ -12,12 +12,12 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
@@ -45,6 +46,7 @@ public class MultiConfigCdcPipelineManager {
     private String heartbeatActionQuery;
 
     private final Map<Long, CdcPipeline> pipelines = new ConcurrentHashMap<>();
+    private final Map<Long, Object> pipelineLocks = new ConcurrentHashMap<>();
     private final Map<Long, LocalDateTime> lastRestartAttempts = new ConcurrentHashMap<>();
     private static final Duration RESTART_COOLDOWN = Duration.ofMinutes(5);
 
@@ -77,7 +79,7 @@ public class MultiConfigCdcPipelineManager {
         }
     }
 
-    public synchronized void startPipeline(DataSourceConfig config) {
+    public void startPipeline(DataSourceConfig config) {
         if (config == null || !Boolean.TRUE.equals(config.getIsActive())) {
             log.warn("配置无效或未启用: {}", config != null ? config.getId() : null);
             return;
@@ -86,12 +88,75 @@ public class MultiConfigCdcPipelineManager {
         ensureExecutorReady();
 
         Long configId = config.getId();
-        if (pipelines.containsKey(configId)) {
-            log.warn("配置 {} 的管道已存在，跳过启动", configId);
-            return;
-        }
+        synchronized (lockFor(configId)) {
+            if (pipelines.containsKey(configId)) {
+                log.warn("配置 {} 的管道已存在，跳过启动", configId);
+                return;
+            }
 
-        try {
+            try {
+                CdcPipeline pipeline = new CdcPipeline(
+                        config,
+                        virtualThreadExecutor,
+                        rocketMQProducerService,
+                        asyncEventSenderService,
+                        objectMapper,
+                        resolveOffsetJdbcUrl(),
+                        resolveOffsetJdbcUser(),
+                        resolveOffsetJdbcPassword(),
+                        heartbeatIntervalMs,
+                        heartbeatActionQuery
+                );
+                pipeline.start();
+                pipelines.put(configId, pipeline);
+                log.info("配置 {} 的 CDC 管道已启动", configId);
+            } catch (Exception e) {
+                log.error("启动配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
+                throw new RuntimeException("启动 CDC 管道失败", e);
+            }
+        }
+    }
+
+    public void stopPipeline(Long configId) {
+        synchronized (lockFor(configId)) {
+            CdcPipeline pipeline = pipelines.get(configId);
+            if (pipeline == null) {
+                log.warn("配置 {} 的管道不存在", configId);
+                return;
+            }
+
+            try {
+                pipeline.stop();
+            } catch (Exception e) {
+                log.error("停止配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
+            } finally {
+                pipelines.remove(configId);
+            }
+        }
+    }
+
+    public void restartPipeline(Long configId) {
+        synchronized (lockFor(configId)) {
+            CdcPipeline existing = pipelines.get(configId);
+            if (existing != null) {
+                try {
+                    existing.stop();
+                } catch (Exception e) {
+                    log.error("停止配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
+                } finally {
+                    pipelines.remove(configId);
+                }
+            }
+
+            DataSourceConfig config = configService.getConfigById(configId)
+                    .orElseThrow(() -> new RuntimeException("配置不存在: " + configId));
+
+            if (!Boolean.TRUE.equals(config.getIsActive())) {
+                log.warn("配置 {} 未启用，跳过重启", configId);
+                return;
+            }
+
+            ensureExecutorReady();
             CdcPipeline pipeline = new CdcPipeline(
                     config,
                     virtualThreadExecutor,
@@ -106,34 +171,8 @@ public class MultiConfigCdcPipelineManager {
             );
             pipeline.start();
             pipelines.put(configId, pipeline);
-            log.info("配置 {} 的 CDC 管道已启动", configId);
-        } catch (Exception e) {
-            log.error("启动配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
-            throw new RuntimeException("启动 CDC 管道失败", e);
+            log.info("配置 {} 的 CDC 管道已重启", configId);
         }
-    }
-
-    public synchronized void stopPipeline(Long configId) {
-        CdcPipeline pipeline = pipelines.get(configId);
-        if (pipeline == null) {
-            log.warn("配置 {} 的管道不存在", configId);
-            return;
-        }
-
-        try {
-            pipeline.stop();
-        } catch (Exception e) {
-            log.error("停止配置 {} 的 CDC 管道失败: {}", configId, e.getMessage(), e);
-        } finally {
-            pipelines.remove(configId);
-        }
-    }
-
-    public synchronized void restartPipeline(Long configId) {
-        stopPipeline(configId);
-        DataSourceConfig config = configService.getConfigById(configId)
-                .orElseThrow(() -> new RuntimeException("配置不存在: " + configId));
-        startPipeline(config);
     }
 
     public Map<Long, PipelineStatus> getAllPipelineStatus() {
@@ -198,6 +237,10 @@ public class MultiConfigCdcPipelineManager {
         return pipelines.size();
     }
 
+    private Object lockFor(Long configId) {
+        return pipelineLocks.computeIfAbsent(configId, id -> new Object());
+    }
+
     private boolean isCooldownExpired(Long configId) {
         LocalDateTime lastAttempt = lastRestartAttempts.get(configId);
         if (lastAttempt == null) {
@@ -259,6 +302,9 @@ public class MultiConfigCdcPipelineManager {
         private final int heartbeatIntervalMs;
         private final String heartbeatActionQuery;
 
+        private final Object lifecycleLock = new Object();
+        private final AtomicBoolean closeInitiated = new AtomicBoolean(false);
+
         private DebeziumEngine<ChangeEvent<String, String>> engine;
         private Future<?> engineFuture;
         private LocalDateTime startTime;
@@ -295,50 +341,81 @@ public class MultiConfigCdcPipelineManager {
         }
 
         public void start() {
-            Properties props = buildDebeziumProperties();
-
-            engine = DebeziumEngine.create(Json.class)
-                    .using(props)
-                    .notifying(this::handleChangeEvent)
-                    .using((success, message, error) -> {
-                        if (success) {
-                            lastError = null;
-                        } else {
-                            lastError = error != null ? error.getMessage() : message;
-                        }
-                    })
-                    .build();
-
-            engineFuture = executor.submit(() -> {
-                try {
-                    running = true;
-                    startTime = LocalDateTime.now();
-                    engine.run();
-                } catch (Exception e) {
-                    lastError = e.getMessage();
-                    log.error("配置 {} 的 CDC 管道运行异常: {}", config.getId(), e.getMessage(), e);
-                } finally {
-                    running = false;
+            synchronized (lifecycleLock) {
+                if (running) {
+                    log.warn("配置 {} 的 CDC 管道已在运行，忽略重复 start", config.getId());
+                    return;
                 }
-            });
+
+                closeInitiated.set(false);
+                Properties props = buildDebeziumProperties();
+
+                engine = DebeziumEngine.create(Json.class)
+                        .using(props)
+                        .notifying(this::handleChangeEvent)
+                        .using((success, message, error) -> {
+                            if (success) {
+                                lastError = null;
+                            } else {
+                                lastError = error != null ? error.getMessage() : message;
+                            }
+                        })
+                        .build();
+
+                engineFuture = executor.submit(() -> {
+                    try {
+                        running = true;
+                        startTime = LocalDateTime.now();
+                        engine.run();
+                    } catch (Exception e) {
+                        lastError = e.getMessage();
+                        log.error("配置 {} 的 CDC 管道运行异常: {}", config.getId(), e.getMessage(), e);
+                    } finally {
+                        running = false;
+                    }
+                });
+            }
         }
 
-        public void stop() throws IOException {
-            try {
-                if (engine != null) {
-                    engine.close();
-                    if (engineFuture != null) {
+        public void stop() {
+            synchronized (lifecycleLock) {
+                if (!closeInitiated.compareAndSet(false, true)) {
+                    log.debug("配置 {} 已触发过关闭，忽略重复 stop", config.getId());
+                    return;
+                }
+
+                DebeziumEngine<ChangeEvent<String, String>> localEngine = this.engine;
+                Future<?> localFuture = this.engineFuture;
+
+                try {
+                    if (localEngine != null) {
                         try {
-                            engineFuture.get(10, TimeUnit.SECONDS);
-                        } catch (TimeoutException ignored) {
-                            log.warn("等待配置 {} 的引擎线程退出超时", config.getId());
+                            localEngine.close();
+                        } catch (Exception e) {
+                            String msg = e.getMessage();
+                            String normalized = msg == null ? "" : msg.toLowerCase(Locale.ROOT);
+                            if (normalized.contains("already shutdown") || normalized.contains("already closed")) {
+                                log.debug("配置 {} 引擎已关闭（幂等）: {}", config.getId(), msg);
+                            } else {
+                                log.warn("关闭配置 {} 的 Debezium 引擎失败: {}", config.getId(), msg, e);
+                            }
                         }
                     }
+
+                    if (localFuture != null) {
+                        try {
+                            localFuture.get(10, TimeUnit.SECONDS);
+                        } catch (TimeoutException ignored) {
+                            log.warn("等待配置 {} 的引擎线程退出超时", config.getId());
+                        } catch (Exception e) {
+                            log.debug("配置 {} 引擎线程结束时异常（可忽略）: {}", config.getId(), e.getMessage());
+                        }
+                    }
+                } finally {
+                    running = false;
+                    this.engine = null;
+                    this.engineFuture = null;
                 }
-            } catch (Exception e) {
-                log.warn("关闭配置 {} 的 Debezium 引擎失败: {}", config.getId(), e.getMessage());
-            } finally {
-                running = false;
             }
         }
 
